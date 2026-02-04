@@ -1,10 +1,3 @@
-# fb_ad_monitor.py
-# Copyright (c) 2024, regek
-# All rights reserved.
-
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 import hashlib
 import json
 import logging
@@ -34,7 +27,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.firefox import GeckoDriverManager
 
-# --- Constants ---
 DEFAULT_DB_NAME = 'fb-rss-feed.db'
 DEFAULT_LOG_LEVEL = 'INFO'
 CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
@@ -60,53 +52,45 @@ class fbRssAdMonitor:
         Args:
             json_file (str): Path to the configuration JSON file.
         """
-        self.config_file_path: str = json_file # Store path to config file
-        self.config_lock: RLock = RLock() # Lock for config file operations
+        self.config_file_path: str = json_file
+        self.config_lock: RLock = RLock()
 
         self.urls_to_monitor: List[str] = []
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
         self.database: str = DEFAULT_DB_NAME
         self.local_tz = tzlocal.get_localzone()
-        self.log_filename: str = "fb_monitor.log" # Default, will be overwritten by config
-        self.server_ip: str = "0.0.0.0" # Default
-        self.server_port: int = 5000 # Default
-        self.currency: str = "$" # Default
-        self.refresh_interval_minutes: int = 15 # Default
+        self.log_filename: str = "fb_monitor.log"
+        self.server_ip: str = "0.0.0.0"
+        self.server_port: int = 5000
+        self.currency: str = "$"
+        self.refresh_interval_minutes: int = 15
         self.driver: Optional[webdriver.Firefox] = None
-        # self.logger: logging.Logger = logging.getLogger(__name__) # Placeholder, setup in set_logger
         self.scheduler: Optional[BackgroundScheduler] = None
-        self.job_lock: Lock = Lock() # Lock for the ad checking job
+        self.job_lock: Lock = Lock()
 
-        # Initialize logger attribute and perform initial setup
         self.logger = logging.getLogger(__name__)
-        self.set_logger() # Initial setup with default self.log_filename
+        self.set_logger()
 
-        # Load configuration. This may update self.log_filename.
-        # load_from_json can now safely use the initialized self.logger for its own error reporting.
         try:
             original_log_filename = self.log_filename
             self.load_from_json(self.config_file_path)
 
-            # If log_filename was changed by loading config, re-initialize the logger's file handler.
             if self.log_filename != original_log_filename:
                 self.logger.info(f"Log filename updated from '{original_log_filename}' to '{self.log_filename}'. Re-initializing logger file handler.")
-                self.set_logger() # This will re-setup handlers, including the file handler with the new name.
+                self.set_logger()
         except Exception as e:
-            # Log critical failure and re-raise to prevent app from running in a bad state
-            if self.logger and hasattr(self.logger, 'critical'): # Ensure logger is usable
+            if self.logger and hasattr(self.logger, 'critical'):
                 self.logger.critical(f"Fatal error during configuration loading: {e}", exc_info=True)
             else:
-                # Fallback print if logger itself failed catastrophically
                 print(f"CRITICAL FALLBACK: Fatal error during configuration loading and logger unavailable: {e}")
-            raise # Important to stop execution if config is broken
+            raise
 
-        # Initialize Flask app
         self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
         self._setup_routes()
 
         self.rss_feed: PyRSS2Gen.RSS2 = PyRSS2Gen.RSS2(
             title="Facebook Marketplace Ad Feed",
-            link=f"http://{self.server_ip}:{self.server_port}/rss", # Use configured IP/Port
+            link=f"http://{self.server_ip}:{self.server_port}/rss",
             description="An RSS feed to monitor new ads on Facebook Marketplace",
             lastBuildDate=datetime.now(timezone.utc),
             items=[]
@@ -118,18 +102,16 @@ class fbRssAdMonitor:
         Sets up logging configuration with both file and console streaming.
         Log level is fetched from the environment variable LOG_LEVEL.
         """
-        self.logger = logging.getLogger(__name__) # Get the logger instance
+        self.logger = logging.getLogger(__name__)
         log_formatter = logging.Formatter(
             '%(levelname)s:%(asctime)s:%(funcName)s:%(lineno)d::%(message)s',
             datefmt='%m/%d/%Y %I:%M:%S %p'
         )
 
-        # Get log level from environment variable, defaulting to INFO if not set
         log_level_str = os.getenv(LOG_LEVEL_ENV_VAR, DEFAULT_LOG_LEVEL).upper()
         try:
             log_level = logging.getLevelName(log_level_str)
-            if not isinstance(log_level, int): # Check if getLevelName returned a valid level
-                 # Use basicConfig for logging before logger is fully set up
+            if not isinstance(log_level, int):
                  logging.basicConfig(level=logging.WARNING)
                  logging.warning(f"Invalid LOG_LEVEL '{log_level_str}'. Defaulting to {DEFAULT_LOG_LEVEL}.")
                  log_level = logging.INFO
@@ -139,29 +121,24 @@ class fbRssAdMonitor:
             log_level = logging.INFO
 
 
-        # File handler (rotating log)
         try:
             file_handler = RotatingFileHandler(
-                self.log_filename, mode='a', maxBytes=10*1024*1024, # Use 'a' for append
-                backupCount=2, encoding='utf-8', delay=False # Use utf-8
+                self.log_filename, mode='a', maxBytes=10*1024*1024,
+                backupCount=2, encoding='utf-8', delay=False
             )
             file_handler.setFormatter(log_formatter)
             file_handler.setLevel(log_level)
             self.logger.addHandler(file_handler)
         except Exception as e:
-             # Use basicConfig for fallback logging if file handler fails
             logging.basicConfig(level=logging.ERROR)
             logging.error(f"Failed to set up file logging handler for {self.log_filename}: {e}. Logging to console only.")
 
-
-        # Stream handler (console output)
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(log_formatter)
         console_handler.setLevel(log_level)
 
-        # Set the logger level and add handlers
         self.logger.setLevel(log_level)
-        # self.logger.addHandler(file_handler) # Added above with error handling
+        # self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
         self.logger.info(f"Logger initialized with level {logging.getLevelName(log_level)}")
 
@@ -171,20 +148,15 @@ class fbRssAdMonitor:
         Initializes Selenium WebDriver with Firefox options.
         Ensures any existing driver is quit first.
         """
-        self.quit_selenium() # Ensure previous instance is closed
+        self.quit_selenium()
 
         try:
             self.logger.debug("Initializing Selenium WebDriver...")
             firefox_options = FirefoxOptions()
-            # Specify Firefox binary path explicitly for Docker compatibility
-            # Try multiple possible Firefox binary locations for different environments
             possible_paths = [
-                # Homebrew macOS path
                 "/opt/homebrew/bin/firefox",
-                # Standard macOS paths
                 "/Applications/Firefox.app/Contents/MacOS/firefox",
                 "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox",
-                # Standard Linux paths
                 "/usr/bin/firefox",
                 "/usr/lib/firefox/firefox",
                 "/snap/bin/firefox",
@@ -192,7 +164,6 @@ class fbRssAdMonitor:
                 "/usr/local/bin/firefox",
                 "/app/firefox/firefox",
                 "/firefox/firefox",
-                # Common Docker/Ubuntu paths
                 "/usr/bin/firefox-esr",
                 "/usr/lib/firefox-esr/firefox-esr"
             ]
@@ -208,7 +179,6 @@ class fbRssAdMonitor:
                 self.logger.debug(f"Using Firefox binary at: {firefox_path}")
             else:
                 self.logger.warning("Firefox binary not found in standard locations. Letting webdriver-manager handle it automatically.")
-                # Don't set binary_location, let webdriver-manager find it
             firefox_options.add_argument("--no-sandbox")
             firefox_options.add_argument("--disable-dev-shm-usage")
             firefox_options.add_argument("--private")
@@ -218,16 +188,12 @@ class fbRssAdMonitor:
             firefox_options.set_preference("useAutomationExtension", False)
             firefox_options.set_preference("privacy.resistFingerprinting", True)
 
-            # Suppress GeckoDriverManager logs unless logger level is DEBUG
             log_level_gecko = logging.WARNING if self.logger.level > logging.DEBUG else logging.DEBUG
-            os.environ['WDM_LOG_LEVEL'] = str(log_level_gecko) # Set env var for WDM logging level
-            # Also configure WDM to use the logger's log file if possible
-            os.environ['WDM_LOCAL'] = '1' # Try to use local cache
-            # Note: WDM might still log to stderr/stdout depending on its internal setup
+            os.environ['WDM_LOG_LEVEL'] = str(log_level_gecko)
+            os.environ['WDM_LOCAL'] = '1'
 
             gecko_driver_path = GeckoDriverManager().install()
-            
-            # Redirect selenium service logs to /dev/null (or NUL on windows) to prevent console spam
+
             service_log_path = 'nul' if os.name == 'nt' else '/dev/null'
             self.driver = webdriver.Firefox(
                 service=FirefoxService(gecko_driver_path, log_path=service_log_path),
@@ -237,12 +203,12 @@ class fbRssAdMonitor:
 
         except WebDriverException as e:
             self.logger.error(f"WebDriverException during Selenium initialization: {e}")
-            self.driver = None # Ensure driver is None if init fails
-            raise # Re-raise the exception to be handled by the caller
+            self.driver = None
+            raise
         except Exception as e:
             self.logger.error(f"Unexpected error initializing Selenium: {e}")
-            self.driver = None # Ensure driver is None if init fails
-            raise # Re-raise the exception
+            self.driver = None
+            raise
 
 
     def quit_selenium(self) -> None:
@@ -257,7 +223,7 @@ class fbRssAdMonitor:
             except Exception as e:
                  self.logger.error(f"Unexpected error quitting Selenium WebDriver: {e}")
             finally:
-                self.driver = None # Ensure driver is set to None
+                self.driver = None
 
 
     def setup_scheduler(self) -> None:
@@ -269,13 +235,12 @@ class fbRssAdMonitor:
              return
 
         self.logger.info(f"Setting up scheduler to run every {self.refresh_interval_minutes} minutes.")
-        job_id = 'check_ads_job' # Use a fixed ID
+        job_id = 'check_ads_job'
 
         if self.scheduler is None:
             self.scheduler = BackgroundScheduler(timezone=str(self.local_tz))
 
         try:
-            # Remove existing job if it exists, before adding/rescheduling
             try:
                 self.scheduler.remove_job(job_id)
                 self.logger.info(f"Removed existing job '{job_id}' before rescheduling.")
@@ -296,11 +261,10 @@ class fbRssAdMonitor:
             self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval_minutes} minutes.")
 
         except ConflictingIdError:
-            # This case should ideally be handled by remove_job now, but as a fallback:
             self.logger.warning(f"Job '{job_id}' conflict. Attempting to reschedule.")
             self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
             if not self.scheduler.running:
-                self.scheduler.start(paused=False) # Resume if paused
+                self.scheduler.start(paused=False)
             self.logger.info(f"Scheduler resumed/rescheduled job '{job_id}'.")
         except Exception as e:
              self.logger.error(f"Failed to setup or start scheduler: {e}")
@@ -309,7 +273,6 @@ class fbRssAdMonitor:
     def local_time(self, dt: datetime) -> datetime:
         """Converts a UTC datetime object to local time."""
         if dt.tzinfo is None:
-             # Assume UTC if no timezone info
              dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(self.local_tz)
 
@@ -331,15 +294,13 @@ class fbRssAdMonitor:
             with open(json_file, 'r', encoding='utf-8') as file:
                 data = json.load(file)
 
-            # Validate and assign configuration values
             self.server_ip = data.get('server_ip', self.server_ip)
             self.server_port = data.get('server_port', self.server_port)
             self.currency = data.get('currency', self.currency)
             self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
             self.log_filename = data.get('log_filename', self.log_filename)
-            self.database = data.get('database_name', self.database) # Allow overriding DB name
+            self.database = data.get('database_name', self.database)
 
-            # Validate url_filters structure
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
                  raise ValueError("'url_filters' must be a dictionary in the config file.")
@@ -370,7 +331,7 @@ class fbRssAdMonitor:
              self.logger.error(f"Configuration error in {json_file}: {e}")
              raise
         except Exception as e:
-            self.logger.exception(f"Unexpected error loading configuration from {json_file}: {e}") # Use exception for stack trace
+            self.logger.exception(f"Unexpected error loading configuration from {json_file}: {e}")
             raise
 
 
@@ -388,15 +349,14 @@ class fbRssAdMonitor:
             bool: True if the title matches all filter levels for the URL, False otherwise.
         """
         filters = self.url_filters.get(url)
-        # If filters is None (URL not in url_filters) or an empty dict {} (URL present but no levels/keywords defined),
-        # it means no filtering should be applied for this URL.
-        if not filters: # This covers both None and {}
+
+        if not filters:
             self.logger.debug(f"No specific keyword filters defined for URL '{url}' (filters: {filters}). Ad '{title}' passes.")
-            return True # No filters for this URL, so it passes
+            return True
 
         if not isinstance(filters, dict):
              self.logger.warning(f"Filters for URL '{url}' are not a dictionary (type: {type(filters)}). Skipping filters.")
-             return True # Invalid filter format, treat as passing
+             return True
 
         try:
 
@@ -407,7 +367,6 @@ class fbRssAdMonitor:
                 self.logger.debug(f"Ad '{title}' for URL '{url}' contains excluded keywords. Keywords: {exclude_keywords}")
                 return False
 
-            # Sort levels numerically (level1, level2, ...)
             level_keys = sorted(
                 [k for k in filters.keys() if k.startswith('level') and k[5:].isdigit()],
                 key=lambda x: int(x[5:])
@@ -415,30 +374,28 @@ class fbRssAdMonitor:
 
             if not level_keys:
                  self.logger.debug(f"No valid 'levelX' keys found in filters for URL '{url}'. Ad '{title}' passes.")
-                 return True # No valid levels defined
+                 return True
 
             for level in level_keys:
                 keywords = filters.get(level, [])
                 if not isinstance(keywords, list):
                      self.logger.warning(f"Keywords for level '{level}' in URL '{url}' are not a list. Skipping level.")
-                     continue # Skip invalid level format
+                     continue
 
                 if not keywords:
                      self.logger.debug(f"No keywords defined for level '{level}' in URL '{url}'. Skipping level.")
-                     continue # Skip empty level
+                     continue
 
-                # Check if *any* keyword in this level matches
                 if not any(keyword.lower() in title_lower for keyword in keywords):
                     self.logger.debug(f"Ad '{title}' failed filter level '{level}' for URL '{url}'. Keywords: {keywords}")
-                    return False # Must match at least one keyword per level
+                    return False
 
-            # If all levels passed
             self.logger.debug(f"Ad '{title}' passed all filter levels for URL '{url}'.")
             return True
 
         except Exception as e:
             self.logger.exception(f"Error applying filters for URL '{url}', title '{title}': {e}")
-            return False # Fail safe on error
+            return False
 
 
     def save_html(self, soup: BeautifulSoup, filename: str = 'output.html') -> None:
@@ -471,28 +428,26 @@ class fbRssAdMonitor:
             try:
                 self.logger.info(f"Requesting URL: {url} (attempt {attempt + 1}/{max_retries + 1})")
                 self.driver.get(url)
-                
-                # Wait for page to load with multiple fallback strategies
+
                 try:
-                    # First try the original selector
+
                     WebDriverWait(self.driver, 15).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, AD_DIV_SELECTOR))
                     )
                 except TimeoutException:
-                    # Fallback: wait for any div that might contain ads
+
                     try:
                         WebDriverWait(self.driver, 10).until(
                             EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='main'], div[data-pagelet='MarketplacePDP'], main"))
                         )
                         self.logger.warning(f"Using fallback selector for {url} - AD_DIV_SELECTOR may be outdated")
                     except TimeoutException:
-                        # Final fallback: wait for body to be present
+
                         WebDriverWait(self.driver, 5).until(
                             EC.presence_of_element_located((By.TAG_NAME, "body"))
                         )
                         self.logger.warning(f"Using body tag fallback for {url} - page structure may have changed")
-                
-                # Additional wait for JavaScript to complete
+
                 WebDriverWait(self.driver, 5).until(
                     lambda driver: driver.execute_script("return document.readyState") == "complete"
                 )
@@ -503,7 +458,7 @@ class fbRssAdMonitor:
             except WebDriverException as e:
                 if attempt == max_retries:
                     self.logger.error(f"Selenium error fetching page content for {url} after {max_retries + 1} attempts: {e}")
-                    # Save page source for debugging on final failure
+
                     try:
                         page_source = self.driver.page_source if self.driver else "No driver available"
                         error_filename = f"error_page_{int(time.time())}.html"
@@ -517,7 +472,7 @@ class fbRssAdMonitor:
                     return None
                 else:
                     self.logger.warning(f"Selenium error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)  # Wait before retry
+                    time.sleep(2)
                     
             except Exception as e:
                 if attempt == max_retries:
@@ -525,7 +480,7 @@ class fbRssAdMonitor:
                     return None
                 else:
                     self.logger.warning(f"Unexpected error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)  # Wait before retry
+                    time.sleep(2)
 
 
     def get_ads_hash(self, content: str) -> str:
@@ -557,14 +512,12 @@ class fbRssAdMonitor:
         ads_found: List[Tuple[str, str, str, str]] = []
         try:
             soup = BeautifulSoup(content, 'html.parser')
-            # --- Uncomment to save HTML for debugging ---
-            # self.save_html(soup, f"page_content_{source_url.split('/')[-1].split('?')[0]}_{int(time.time())}.html")
 
             # Find all potential ad links (<a> tags with an href)
             ad_links = soup.find_all(AD_LINK_TAG, href=True)
             self.logger.debug(f"Found {len(ad_links)} potential ad links on {source_url}.")
 
-            processed_urls = set() # Keep track of processed ad URLs to avoid duplicates from the same page
+            processed_urls = set()
 
             for ad_link in ad_links:
                 href = ad_link.get('href', '')
@@ -572,15 +525,13 @@ class fbRssAdMonitor:
                 if not href or not href.startswith('/marketplace/item/'):
                     continue
 
-                # Construct full URL and normalize (remove query params)
                 full_url = f"{FACEBOOK_BASE_URL}{href.split('?')[0]}"
 
                 if full_url in processed_urls:
-                     continue # Skip if already processed this ad URL on this page
+                     continue
                 processed_urls.add(full_url)
 
 
-                # Find title and price with multiple fallback strategies
                 title = None
                 price = None
                 
@@ -595,29 +546,23 @@ class fbRssAdMonitor:
                 
                 # Strategy 2: Fallback - look for common title/price patterns
                 if not title or not price:
-                    # Look for spans with common Marketplace classes
                     all_spans = ad_link.find_all('span')
                     for span in all_spans:
                         span_text = span.get_text(strip=True)
-                        if span_text and len(span_text) > 10 and not title:  # Likely title
+                        if span_text and len(span_text) > 10 and not title:
                             title = span_text
                         elif span_text and (span_text.startswith(self.currency) or 'free' in span_text.lower()) and not price:
                             price = span_text
-                
-                # Strategy 3: Final fallback - text content analysis
+
                 if not title:
-                    # Use link text or nearby text as title
                     link_text = ad_link.get_text(strip=True)
                     if link_text and len(link_text) > 10:
                         title = link_text
                 
                 if title and price:
-                    # Validate price format
                     if price.startswith(self.currency) or 'free' in price.lower():
-                        # Generate a unique ID based on the ad's URL
                         ad_id_hash = self.get_ads_hash(full_url)
 
-                        # Apply filters based on the source URL the ad was found on
                         if self.apply_filters(source_url, title):
                             ads_found.append((ad_id_hash, title, price, full_url))
                         # else:
@@ -673,23 +618,22 @@ class fbRssAdMonitor:
             conn = self.get_db_connection()
             if not conn:
                 self.logger.error("Failed to get database connection. Aborting ad check.")
-                return # Cannot proceed without DB
+                return
 
             cursor = conn.cursor()
-            # Keep track of ads added in this run to avoid duplicates if multiple URLs list the same ad
             added_ad_ids_this_run = set()
 
             for url in self.urls_to_monitor:
                 processed_urls_count += 1
                 self.logger.info(f"Processing URL ({processed_urls_count}/{len(self.urls_to_monitor)}): {url}")
                 try:
-                    self.init_selenium() # Initialize driver for this URL
+                    self.init_selenium()
                     if not self.driver:
                          self.logger.warning(f"Skipping URL {url} due to Selenium initialization failure.")
-                         continue # Skip to next URL if driver init failed
+                         continue
 
                     content = self.get_page_content(url)
-                    self.quit_selenium() # Quit driver after fetching content for this URL
+                    self.quit_selenium()
 
                     if content is None:
                         self.logger.warning(f"No content received for URL: {url}. Skipping.")
@@ -704,16 +648,14 @@ class fbRssAdMonitor:
                     for ad_id, title, price, ad_url in ads:
                         if ad_id in added_ad_ids_this_run:
                              self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
-                             continue # Avoid processing the same ad multiple times if found via different source URLs
+                             continue
 
-                        # Check if ad exists in DB (more robust check than just recent)
                         cursor.execute('SELECT ad_id FROM ad_changes WHERE ad_id = ?', (ad_id,))
                         existing_ad = cursor.fetchone()
                         now_utc = datetime.now(timezone.utc)
                         now_iso = now_utc.isoformat()
 
                         if existing_ad is None:
-                            # Ad is completely new
                             self.logger.info(f"New ad detected: '{title}' ({price}) - {ad_url}")
                             new_item = PyRSS2Gen.RSSItem(
                                 title=f"{title} - {price}",
@@ -728,23 +670,20 @@ class fbRssAdMonitor:
                                     (ad_url, ad_id, title, price, now_iso, now_iso)
                                 )
                                 conn.commit()
-                                # Prepend to the live RSS feed object
                                 self.rss_feed.items.insert(0, new_item)
                                 added_ad_ids_this_run.add(ad_id)
                                 new_ads_added_count += 1
                                 self.logger.debug(f"Successfully added new ad '{title}' to DB and RSS feed.")
                             except sqlite3.IntegrityError:
                                 self.logger.warning(f"IntegrityError inserting ad '{title}' ({ad_id}). Might be a race condition. Updating last_checked.")
-                                # If insert fails due to constraint (e.g., ad added between SELECT and INSERT), update last_checked
                                 cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
                                                (now_iso, ad_id))
                                 conn.commit()
                             except sqlite3.Error as db_err:
                                  self.logger.error(f"Database error processing ad '{title}' ({ad_id}): {db_err}")
-                                 conn.rollback() # Rollback on error for this specific ad
+                                 conn.rollback()
 
                         else:
-                             # Ad exists, update last_checked timestamp
                              self.logger.debug(f"Existing ad found: '{title}' ({ad_id}). Updating last_checked.")
                              cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
                                             (now_iso, ad_id))
@@ -753,14 +692,10 @@ class fbRssAdMonitor:
 
                 except Exception as url_proc_err:
                      self.logger.exception(f"Error processing URL {url}: {url_proc_err}")
-                     # Ensure driver is quit even if processing fails mid-way for a URL
                      self.quit_selenium()
                 finally:
-                     # Short delay between processing URLs
                      time.sleep(2)
 
-
-            # --- Optional: Prune old ads from DB ---
             self.prune_old_ads(conn, os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
 
             self.logger.info(f"Finished ad check. Added {new_ads_added_count} new ads.")
@@ -768,11 +703,10 @@ class fbRssAdMonitor:
         except sqlite3.DatabaseError as e:
             self.logger.error(f"Database error during ad check: {e}")
             if conn:
-                 conn.rollback() # Rollback any potential partial changes
+                 conn.rollback()
         except Exception as e:
-            self.logger.exception(f"Unexpected error during ad check: {e}") # Use exception for stack trace
+            self.logger.exception(f"Unexpected error during ad check: {e}")
         finally:
-            # Ensure driver is quit if the loop finished or broke unexpectedly
             self.quit_selenium()
             if conn:
                 conn.close()
@@ -811,12 +745,9 @@ class fbRssAdMonitor:
             conn = self.get_db_connection()
             if not conn:
                  self.logger.error("Cannot generate RSS feed from DB: No database connection.")
-                 # Keep existing items if DB fails
                  return
 
             cursor = conn.cursor()
-            # Fetch ads from the last N days (e.g., 7 days) or based on refresh interval for relevance
-            # Using a fixed period like 7 days might be more robust than relying on lastBuildDate
             relevant_period_start = datetime.now(timezone.utc) - timedelta(days=7)
 
             cursor.execute('''
@@ -831,9 +762,7 @@ class fbRssAdMonitor:
 
             for change in changes:
                 try:
-                    # Ensure last_checked is parsed correctly
                     last_checked_dt_utc = parser.isoparse(change['last_checked'])
-                    # Convert to local time for pubDate
                     pub_date_local = self.local_time(last_checked_dt_utc)
 
                     new_item = PyRSS2Gen.RSSItem(
@@ -849,19 +778,16 @@ class fbRssAdMonitor:
                 except Exception as item_err:
                      self.logger.exception(f"Unexpected error creating RSS item for ad (ID: {change['ad_id']}): {item_err}. Skipping item.")
 
-
-            # Update the RSS feed object
             self.rss_feed.items = new_items
-            self.rss_feed.lastBuildDate = datetime.now(timezone.utc) # Update last build date
+            self.rss_feed.lastBuildDate = datetime.now(timezone.utc)
             self.logger.info(f"RSS feed updated with {len(new_items)} items from database.")
 
         except sqlite3.DatabaseError as e:
             self.logger.error(f"Database error generating RSS feed: {e}")
-            # Optionally keep old items on error: `return` instead of `self.rss_feed.items = []`
-            self.rss_feed.items = [] # Clear items on DB error to avoid stale data? Or keep old ones? Clearing for now.
+            self.rss_feed.items = []
         except Exception as e:
             self.logger.exception(f"Unexpected error generating RSS feed: {e}")
-            self.rss_feed.items = [] # Clear items on unexpected error
+            self.rss_feed.items = []
         finally:
             if conn:
                 conn.close()
@@ -873,8 +799,6 @@ class fbRssAdMonitor:
         Flask endpoint handler. Generates and returns the RSS feed XML.
         """
         self.logger.info("RSS feed requested. Generating fresh feed from database.")
-        # Regenerate the feed content from the DB every time it's requested
-        # to ensure it's up-to-date, rather than relying solely on the scheduled update.
         self.generate_rss_feed_from_db()
 
         try:
@@ -884,15 +808,12 @@ class fbRssAdMonitor:
              self.logger.exception(f"Error converting RSS feed to XML: {e}")
              return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
 
-    # --- Configuration Management Routes ---
     def _setup_routes(self) -> None:
         """Sets up Flask routes."""
         self.app.add_url_rule('/rss', 'rss', self.rss)
         self.app.add_url_rule('/edit', 'edit_config_page', self.edit_config_page, methods=['GET'])
         self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
         self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
-        # Flask serves static files from 'static_folder' automatically at '/static/...'
-        # So an explicit rule for /static/js/edit_config.js is not strictly needed if static_folder is set.
 
     def edit_config_page(self) -> Any:
         """Serves the HTML page for editing configuration."""
@@ -929,7 +850,6 @@ class fbRssAdMonitor:
             "currency": str,
             "refresh_interval_minutes": int,
             "url_filters": dict
-            # log_filename and database_name are also in config but not strictly validated here for dynamic updates
         }
         for key, expected_type in required_keys.items():
             if key not in data:
@@ -947,9 +867,6 @@ class fbRssAdMonitor:
                 parsed_url = urlparse(url)
                 if not all([parsed_url.scheme, parsed_url.netloc]):
                     return False, f"Invalid URL format: {url}"
-                # Optional: more specific facebook marketplace URL check
-                # if not "facebook.com/marketplace" in url.lower():
-                #     return False, f"URL does not appear to be a Facebook Marketplace URL: {url}"
             except ValueError:
                 return False, f"Invalid URL format: {url}"
             if not isinstance(filters, dict):
@@ -979,17 +896,13 @@ class fbRssAdMonitor:
         """
         self.logger.info("Attempting to reload configuration dynamically...")
         applied_dynamically = []
-        requires_restart = [] # Specific items requiring a restart
+        requires_restart = []
 
-        # --- Settings that can be applied dynamically ---
-
-        # Update currency
         new_currency = new_config.get("currency", self.currency)
         if self.currency != new_currency:
             self.currency = new_currency
             applied_dynamically.append("Currency")
 
-        # Update URL filters
         new_url_filters = new_config.get("url_filters", self.url_filters)
         if self.url_filters != new_url_filters:
             self.url_filters = new_url_filters
@@ -997,10 +910,7 @@ class fbRssAdMonitor:
             applied_dynamically.append("URL filters")
             if not self.urls_to_monitor:
                 self.logger.warning("No URLs to monitor after config update. Monitoring will be inactive.")
-                # This isn't a restart warning, but a state warning.
-                # We can add a separate list for general operational warnings if needed.
 
-        # Update refresh interval and reschedule job
         new_interval = new_config.get("refresh_interval_minutes", self.refresh_interval_minutes)
         if self.refresh_interval_minutes != new_interval:
             old_interval = self.refresh_interval_minutes
@@ -1013,39 +923,28 @@ class fbRssAdMonitor:
                     applied_dynamically.append("Refresh interval")
                 except Exception as e:
                     self.logger.error(f"Failed to reschedule job for new interval {self.refresh_interval_minutes}: {e}")
-                    # Revert interval change if reschedule fails, to maintain consistency
                     self.refresh_interval_minutes = old_interval
                     return False, f"Failed to apply new refresh interval ({new_interval} min): Scheduler error. Interval reverted to {old_interval} min."
             else:
-                # If scheduler isn't running, setup_scheduler will pick up the new interval when it's next called
-                self.setup_scheduler() # This will now use the new self.refresh_interval_minutes
+                self.setup_scheduler()
                 applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
 
-        # --- Settings that require a restart ---
-
-        # Server IP and Port
         new_server_ip = new_config.get("server_ip", self.server_ip)
         new_server_port = new_config.get("server_port", self.server_port)
         if self.server_ip != new_server_ip or self.server_port != new_server_port:
-            # Update instance vars for things like RSS feed link, but actual server binding needs restart
             self.server_ip = new_server_ip
             self.server_port = new_server_port
             self.rss_feed.link = f"http://{self.server_ip}:{self.server_port}/rss"
             requires_restart.append("Server IP/Port")
 
-        # Log Filename
         new_log_filename = new_config.get("log_filename", self.log_filename)
         if self.log_filename != new_log_filename:
-            # self.log_filename = new_log_filename # Actual change requires logger re-init, so restart
             requires_restart.append("Log filename")
 
-        # Database Name
         new_database_name = new_config.get("database_name", self.database)
         if self.database != new_database_name:
-            # self.database = new_database_name # Actual change requires DB re-init, so restart
             requires_restart.append("Database name")
 
-        # --- Construct message ---
         message_parts = []
         if applied_dynamically:
             self.logger.info(f"Dynamically applied changes for: {', '.join(applied_dynamically)}")
@@ -1082,16 +981,14 @@ class fbRssAdMonitor:
                 "refresh_interval_minutes": self.refresh_interval_minutes,
                 "log_filename": self.log_filename,
                 "database_name": self.database,
-                "url_filters": self.url_filters.copy() # Ensure a copy
+                "url_filters": self.url_filters.copy()
             }
 
             try:
-                # 1. Backup current config file
                 if os.path.exists(self.config_file_path):
                     shutil.copy2(self.config_file_path, backup_path)
                     self.logger.info(f"Created backup of config: {backup_path}")
 
-                # 2. Write new config to file
                 self.logger.info(f"DEBUG: Data to be written to config by _write_config: {json.dumps(new_data)}")
                 self._write_config(new_data)
                 try:
@@ -1103,38 +1000,11 @@ class fbRssAdMonitor:
                 except Exception as read_check_err:
                     self.logger.error(f"DEBUG: Error reading back config for check: {read_check_err}")
 
-                # 3. Attempt to apply changes dynamically
-                # _reload_config_dynamically is responsible for updating the instance variables
-                # from new_data and applying any dynamic changes (e.g., rescheduling jobs).
-                # We should not call self.load_from_json() here, as that would pre-emptively
-                # update the instance variables, causing _reload_config_dynamically to see
-                # no difference between its current state and new_data for many fields.
-                
-                # The comments below were part of the thought process leading to this correction.
-                # First, update the instance's view of what the config *should* be,
-                # then try to apply. load_from_json updates self. variables.
-                # self.load_from_json(self.config_file_path) # This updates self.server_ip etc. from the new file
-                
-                # Now, _reload_config_dynamically will use these newly loaded self. variables
-                # to compare and apply.
-                # However, _reload_config_dynamically takes new_config as an argument.
-                # Let's pass the `new_data` directly to _reload_config_dynamically
-                # and it will update the necessary self attributes.
-                
-                # The load_from_json above already updated the instance variables.
-                # _reload_config_dynamically will now effectively re-apply some of these,
-                # like rescheduling. This is okay.
-                
-                # Let's refine: _reload_config_dynamically should update the instance variables itself.
-                # So, we don't call self.load_from_json() here before _reload_config_dynamically.
-                # Instead, _reload_config_dynamically will update self.currency, self.url_filters, etc.
-
                 success, reload_msg = self._reload_config_dynamically(new_data)
 
                 if not success:
                     raise Exception(f"Failed to apply new configuration dynamically: {reload_msg}")
 
-                # 4. If successful, remove backup
                 if os.path.exists(backup_path):
                     os.remove(backup_path)
                 self.logger.info("Configuration updated and applied successfully.")
@@ -1142,28 +1012,22 @@ class fbRssAdMonitor:
 
             except Exception as e:
                 self.logger.exception(f"Error updating configuration: {e}. Rolling back.")
-                # Rollback: Restore from backup if it exists
                 if os.path.exists(backup_path):
                     try:
-                        shutil.move(backup_path, self.config_file_path) # move is atomic
+                        shutil.move(backup_path, self.config_file_path)
                         self.logger.info(f"Rolled back configuration from {backup_path}")
-                        # Reload the old (rolled-back) configuration into the application state
                         self.load_from_json(self.config_file_path)
-                        # Re-apply old settings (e.g., reschedule job with old interval)
-                        # This can be done by calling _reload_config_dynamically with the old config
-                        # or simply re-calling setup_scheduler() which uses current self.refresh_interval_minutes
-                        self.setup_scheduler() # Re-initializes scheduler with current (old) settings
+                        self.setup_scheduler()
                         self.logger.info("Re-applied previous configuration settings after rollback.")
 
                     except Exception as rb_err:
                         self.logger.error(f"CRITICAL: Failed to rollback configuration file: {rb_err}. Config may be inconsistent.")
                         return jsonify({"detail": f"Error saving configuration and failed to rollback: {e}. Manual check required."}), 500
                 else:
-                     # If backup didn't exist (e.g. first write failed), try to write original in-memory config back
                     try:
                         self._write_config(current_config_in_memory)
                         self.logger.info("Wrote original in-memory config back after update failure.")
-                        self.load_from_json(self.config_file_path) # Reload this original state
+                        self.load_from_json(self.config_file_path)
                         self.setup_scheduler()
                     except Exception as write_back_err:
                         self.logger.error(f"CRITICAL: Failed to write original config back: {write_back_err}. Config may be corrupted.")
@@ -1173,8 +1037,6 @@ class fbRssAdMonitor:
                 return jsonify({"detail": f"Error saving configuration: {str(e)}. Configuration has been rolled back to previous state."}), 500
 
 
-    # --- Main Application Logic ---
-
     def run(self, debug_opt: bool = False) -> None:
         """
         Starts the Flask application and the background scheduler.
@@ -1183,21 +1045,17 @@ class fbRssAdMonitor:
             debug_opt (bool): Run Flask in debug mode. Defaults to False.
         """
         self.logger.info(f"Starting Flask server on {self.server_ip}:{self.server_port}...")
-        # Start scheduler before Flask app
         self.setup_scheduler()
 
         try:
-            # Use waitress or gunicorn in production instead of Flask's development server
             if debug_opt:
                  self.logger.warning("Running Flask in DEBUG mode.")
-                 # When using scheduler, typically disable Flask's reloader
                  self.app.run(host=self.server_ip, port=self.server_port, debug=True, use_reloader=False)
             else:
-                 # Consider using a production-ready server like waitress
                  try:
                      from waitress import serve
                      self.logger.info("Running Flask with Waitress production server.")
-                     serve(self.app, host=self.server_ip, port=self.server_port, threads=4) # Example with waitress
+                     serve(self.app, host=self.server_ip, port=self.server_port, threads=4)
                  except ImportError:
                      self.logger.warning("Waitress not found. Falling back to Flask development server.")
                      self.logger.warning("Install waitress for a production-ready server: pip install waitress")
@@ -1243,28 +1101,26 @@ def initialize_database(db_name: str, logger: logging.Logger) -> None:
             CREATE TABLE IF NOT EXISTS ad_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
-                ad_id TEXT UNIQUE NOT NULL, -- Hash of the ad URL, must be unique
+                ad_id TEXT UNIQUE NOT NULL,
                 title TEXT NOT NULL,
                 price TEXT NOT NULL,
-                first_seen TEXT NOT NULL, -- ISO format datetime string (UTC)
-                last_checked TEXT NOT NULL -- ISO format datetime string (UTC)
+                first_seen TEXT NOT NULL,
+                last_checked TEXT NOT NULL
             )
         ''')
-        # Optional: Add index for faster lookups
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_ad_id ON ad_changes (ad_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_last_checked ON ad_changes (last_checked)')
         conn.commit()
         logger.info(f"Database '{db_name}' initialized successfully.")
     except sqlite3.Error as e:
         logger.error(f"Error initializing database {db_name}: {e}")
-        raise # Re-raise to prevent application start if DB init fails
+        raise
     finally:
         if conn:
             conn.close()
 
 
 if __name__ == "__main__":
-    # Basic logger setup for initialization phase before config is loaded
     init_logger = logging.getLogger('init')
     init_handler = logging.StreamHandler()
     init_formatter = logging.Formatter('%(levelname)s:%(asctime)s::%(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
@@ -1277,23 +1133,16 @@ if __name__ == "__main__":
 
     if not os.path.exists(config_file):
         init_logger.error(f"Error: Config file '{config_file}' not found!")
-        exit(1) # Use non-zero exit code for errors
+        exit(1)
 
     monitor_instance = None
     try:
-        # Initialize monitor (loads config, sets up detailed logging)
         monitor_instance = fbRssAdMonitor(json_file=config_file)
-
-        # Initialize database using the name from the loaded config
         initialize_database(monitor_instance.database, monitor_instance.logger)
-
-        # Run the monitor (starts scheduler and Flask app)
-        # Set debug_opt=True for development/debugging Flask
         monitor_instance.run(debug_opt=False)
 
     except (FileNotFoundError, ValueError, sqlite3.Error) as e:
          init_logger.error(f"Initialization failed: {e}")
-         # Ensure shutdown is called if monitor was partially initialized
          if monitor_instance:
               monitor_instance.shutdown()
          exit(1)
@@ -1302,23 +1151,3 @@ if __name__ == "__main__":
         if monitor_instance:
              monitor_instance.shutdown()
         exit(1)
-
-
-# Example JSON structure for URL-specific filters (remains the same)
-# {
-#     "server_ip": "0.0.0.0",
-#     "server_port": 5000,
-#     "currency": "$",
-#     "refresh_interval_minutes": 15,
-#     "log_filename": "fb_monitor.log",
-#     "database_name": "fb-rss-feed.db", # Example: Allow overriding DB name
-#     "url_filters": {
-#         "https://www.facebook.com/marketplace/category/search?query=some%20item&exact=false": {
-#             "level1": ["keyword1", "keyword2"],
-#             "level2": ["must_have_this"]
-#         },
-#         "https://www.facebook.com/marketplace/brisbane/search?query=another%20search": {
-#             "level1": ["brisbane_only_keyword"]
-#         }
-#     }
-# }

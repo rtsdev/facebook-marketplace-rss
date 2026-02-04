@@ -1,14 +1,15 @@
-#docker-compose up -d
+---
+
 services:
   fb-mp-rss:
-    build: . # Build from local Dockerfile
-    image: bethekind/fb-mp-rss:latest # Specifies the image to use or build
+    build: .
+    image: bethekind/fb-mp-rss:latest
     container_name: fb-mp-rss
     restart: always
     environment:
-      CONFIG_FILE: /app/config.json # Path for config file inside the container
+      CONFIG_FILE: /app/config.json
       STALE_AD_AGE: 14
     ports:
       - "5000:5000"
     volumes:
-      - ./config.json:/app/config.json # Mounts host's ./config.json to /app/config.json in container
+      - ./config.json:/app/config.json
