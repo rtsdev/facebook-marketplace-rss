@@ -34,10 +34,10 @@ DEFAULT_CONFIG_FILE = 'config.json'
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
-AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz' # Selector for waiting
-AD_LINK_TAG = 'a'
-AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp' # Part of the style attribute for title span
-AD_PRICE_SELECTOR_DIR = 'auto' # dir attribute for price span
+AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz'
+AD_LINK_TAG = "a[href*='/marketplace/item']"
+AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
+AD_PRICE_SELECTOR_DIR = 'auto'
 SELENIUM_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
 FACEBOOK_BASE_URL = "https://facebook.com"
 
@@ -513,17 +513,13 @@ class fbRssAdMonitor:
         try:
             soup = BeautifulSoup(content, 'html.parser')
 
-            # Find all potential ad links (<a> tags with an href)
-            ad_links = soup.find_all(AD_LINK_TAG, href=True)
+            ad_links = soup.select(AD_LINK_TAG)
             self.logger.debug(f"Found {len(ad_links)} potential ad links on {source_url}.")
 
             processed_urls = set()
 
             for ad_link in ad_links:
                 href = ad_link.get('href', '')
-                # Basic validation of the link (e.g., starts with /marketplace/item/)
-                if not href or not href.startswith('/marketplace/item/'):
-                    continue
 
                 full_url = f"{FACEBOOK_BASE_URL}{href.split('?')[0]}"
 
