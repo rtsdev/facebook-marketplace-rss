@@ -7,6 +7,7 @@ services:
     restart: always
     environment:
       CONFIG_FILE: /app/config.json # Path for config file inside the container
+      STALE_AD_AGE: 14
     ports:
       - "5000:5000"
     volumes:

@@ -39,6 +39,8 @@ DEFAULT_DB_NAME = 'fb-rss-feed.db'
 DEFAULT_LOG_LEVEL = 'INFO'
 CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
 DEFAULT_CONFIG_FILE = 'config.json'
+STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
+DEFAULT_STALE_AD_AGE = 14
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz' # Selector for waiting
 AD_LINK_TAG = 'a'
@@ -759,7 +761,7 @@ class fbRssAdMonitor:
 
 
             # --- Optional: Prune old ads from DB ---
-            self.prune_old_ads(conn)
+            self.prune_old_ads(conn, os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
 
             self.logger.info(f"Finished ad check. Added {new_ads_added_count} new ads.")
 
@@ -779,7 +781,7 @@ class fbRssAdMonitor:
             self.logger.debug("Ad check job lock released.")
 
 
-    def prune_old_ads(self, conn: sqlite3.Connection, days_to_keep: int = 14) -> None:
+    def prune_old_ads(self, conn: sqlite3.Connection, days_to_keep: int = DEFAULT_STALE_AD_AGE) -> None:
         """Removes ads from the database that haven't been seen for a specified number of days."""
         if not conn:
              self.logger.warning("Cannot prune ads, database connection is not available.")
