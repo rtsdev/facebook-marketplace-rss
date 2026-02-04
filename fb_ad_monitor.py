@@ -13,12 +13,13 @@ import shutil
 from urllib.parse import urlparse
 
 import PyRSS2Gen
+import requests
 import tzlocal
 from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from dateutil import parser
-from flask import Flask, Response, jsonify, request, render_template
+from flask import Flask, Response, jsonify, request, render_template, make_response, abort
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException, TimeoutException
 from selenium.webdriver.common.by import By
@@ -831,6 +832,23 @@ class fbRssAdMonitor:
         self.app.add_url_rule('/edit', 'edit_config_page', self.edit_config_page, methods=['GET'])
         self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
         self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
+        self.app.add_url_rule('/api/img-proxy', 'img-proxy', self.img_proxy, methods=['GET'])
+
+    def img_proxy(self):
+        try:
+            img_url = request.args.get("url")
+            response = requests.get(img_url, stream=True)
+            response.raise_for_status()
+
+            flask_response = make_response(response.content)
+            flask_response.headers['Content-Type'] = response.headers['Content-Type']
+            flask_response.headers['Content-Length'] = response.headers['Content-Length']
+            return flask_response
+
+        except requests.RequestException as e:
+            self.logger.error(f"Error generating img proxy request: {e}")
+            abort(404)
+
 
     def edit_config_page(self) -> Any:
         """Serves the HTML page for editing configuration."""
@@ -898,6 +916,7 @@ class fbRssAdMonitor:
                 if not all(isinstance(kw, str) for kw in keywords):
                     return False, f"All keywords for '{level_name}' in URL '{url}' must be strings."
         return True, ""
+
 
     def _write_config(self, data: Dict[str, Any]) -> None:
         """Writes the given data to the configuration file."""
