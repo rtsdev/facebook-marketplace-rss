@@ -11,14 +11,12 @@ import logging
 import os
 import sqlite3
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Tuple
-import waitress
-import shutil # For config backup
-from urllib.parse import urlparse # For URL validation
+import shutil
+from urllib.parse import urlparse
 
 import PyRSS2Gen
 import tzlocal
@@ -26,7 +24,7 @@ from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from dateutil import parser
-from flask import Flask, Response, jsonify, request, render_template, send_from_directory
+from flask import Flask, Response, jsonify, request, render_template
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException, TimeoutException
 from selenium.webdriver.common.by import By
