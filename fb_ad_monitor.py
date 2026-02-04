@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -496,7 +497,7 @@ class fbRssAdMonitor:
         return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
-    def extract_ad_details(self, content: str, source_url: str) -> List[Tuple[str, str, str, str]]:
+    def extract_ad_details(self, content: str, source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
         """
         Extracts ad details from the page HTML content and applies URL-specific filters.
 
@@ -509,7 +510,7 @@ class fbRssAdMonitor:
                                              (ad_id_hash, title, price, ad_url).
                                              Only ads matching filters are included.
         """
-        ads_found: List[Tuple[str, str, str, str]] = []
+        ads_found: List[Tuple[str, str, str, str, str, str]] = []
         try:
             soup = BeautifulSoup(content, 'html.parser')
 
@@ -530,17 +531,28 @@ class fbRssAdMonitor:
 
                 title = None
                 price = None
-                
-                # Strategy 1: Original selectors
-                title_span = ad_link.find('span', style=lambda value: value and AD_TITLE_SELECTOR_STYLE in value)
-                price_span = ad_link.find('span', dir=AD_PRICE_SELECTOR_DIR)
-                
-                if title_span:
-                    title = title_span.get_text(strip=True)
-                if price_span:
-                    price = price_span.get_text(strip=True)
-                
-                # Strategy 2: Fallback - look for common title/price patterns
+                location = None
+                image_url = None
+
+                spans = ad_link.select('span')
+
+                for span in spans:
+                    span_text = span.get_text(strip=True)
+
+                    if AD_TITLE_SELECTOR_STYLE in span.attrs.get('style', ''):
+                        title = span_text
+                    elif span.attrs.get('dir', '') == AD_PRICE_SELECTOR_DIR :
+                        if span_text.startswith(self.currency) or 'free' in span_text.lower():
+                            price = span_text
+                    elif re.match(r"^[A-Za-z .'-]+,\s?[A-Z]{2}$", span.get_text(strip=True)):
+                        location = span.get_text(strip=True)
+                    else:
+                        pass
+
+                image_el = ad_link.find('img')
+                if image_el:
+                    image_url = image_el.get('src')
+
                 if not title or not price:
                     all_spans = ad_link.find_all('span')
                     for span in all_spans:
@@ -560,11 +572,7 @@ class fbRssAdMonitor:
                         ad_id_hash = self.get_ads_hash(full_url)
 
                         if self.apply_filters(source_url, title):
-                            ads_found.append((ad_id_hash, title, price, full_url))
-                        # else:
-                        #     self.logger.debug(f"Ad '{title}' ({full_url}) skipped due to filters for {source_url}.")
-                    # else:
-                    #      self.logger.debug(f"Price format invalid for ad '{title}' ({full_url}). Price found: '{price}'")
+                            ads_found.append((ad_id_hash, title, price, location, image_url, full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
@@ -641,7 +649,7 @@ class fbRssAdMonitor:
                          continue
 
 
-                    for ad_id, title, price, ad_url in ads:
+                    for ad_id, title, price, location, img_url, ad_url in ads:
                         if ad_id in added_ad_ids_this_run:
                              self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
                              continue
@@ -653,17 +661,23 @@ class fbRssAdMonitor:
 
                         if existing_ad is None:
                             self.logger.info(f"New ad detected: '{title}' ({price}) - {ad_url}")
+                            description = f"""
+                            Title: {title}
+                            Price: {price}
+                            Location: {location}
+                            """
                             new_item = PyRSS2Gen.RSSItem(
-                                title=f"{title} - {price}",
+                                title=f"{title} - {price} - {location}",
                                 link=ad_url,
-                                description=f"Price: {price} | Title: {title}", # Simpler description
-                                guid=PyRSS2Gen.Guid(ad_id, isPermaLink=False), # Use ad_id hash as GUID
-                                pubDate=self.local_time(now_utc) # Use local time for pubDate
+                                description=description,
+                                enclosure=PyRSS2Gen.Enclosure(img_url, 0, "image/jpeg"),
+                                guid=PyRSS2Gen.Guid(ad_id, isPermaLink=False),
+                                pubDate=self.local_time(now_utc)
                             )
                             try:
                                 cursor.execute(
-                                    'INSERT INTO ad_changes (url, ad_id, title, price, first_seen, last_checked) VALUES (?, ?, ?, ?, ?, ?)',
-                                    (ad_url, ad_id, title, price, now_iso, now_iso)
+                                    'INSERT INTO ad_changes (url, ad_id, title, price, location, img_url, first_seen, last_checked) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                                    (ad_url, ad_id, title, price, location, img_url, now_iso, now_iso)
                                 )
                                 conn.commit()
                                 self.rss_feed.items.insert(0, new_item)
@@ -747,12 +761,12 @@ class fbRssAdMonitor:
             relevant_period_start = datetime.now(timezone.utc) - timedelta(days=7)
 
             cursor.execute('''
-                SELECT ad_id, title, price, url, last_checked
+                SELECT ad_id, title, price, location, img_url, url, last_checked
                 FROM ad_changes
                 WHERE last_checked >= ?
                 ORDER BY last_checked DESC
                 LIMIT 100
-            ''', (relevant_period_start.isoformat(),)) # Limit number of items
+            ''', (relevant_period_start.isoformat(),))
             changes = cursor.fetchall()
             self.logger.debug(f"Fetched {len(changes)} ad changes from DB for RSS feed.")
 
@@ -761,10 +775,17 @@ class fbRssAdMonitor:
                     last_checked_dt_utc = parser.isoparse(change['last_checked'])
                     pub_date_local = self.local_time(last_checked_dt_utc)
 
+                    description = f"""
+                    Title: {change['title']}
+                    Price: {change['price']}
+                    Location: {change['location']}
+                    """
+
                     new_item = PyRSS2Gen.RSSItem(
-                        title=f"{change['title']} - {change['price']}",
+                        title=f"{change['title']} - {change['price']} - {change['location']}",
                         link=change['url'],
-                        description=f"Price: {change['price']} | Title: {change['title']}", # Consistent description
+                        description=description,
+                        enclosure=PyRSS2Gen.Enclosure(change['img_url'], 0, "image/jpeg"),
                         guid=PyRSS2Gen.Guid(change['ad_id'], isPermaLink=False),
                         pubDate=pub_date_local
                     )
@@ -1074,7 +1095,6 @@ class fbRssAdMonitor:
         if self.scheduler and self.scheduler.running:
             self.logger.info("Shutting down scheduler...")
             try:
-                 # wait=False allows faster shutdown, True waits for running jobs
                  self.scheduler.shutdown(wait=False)
                  self.logger.info("Scheduler shut down.")
             except Exception as e:
@@ -1082,7 +1102,7 @@ class fbRssAdMonitor:
         else:
              self.logger.info("Scheduler not running or not initialized.")
 
-        self.quit_selenium() # Ensure Selenium driver is closed
+        self.quit_selenium()
         self.logger.info("Shutdown sequence complete.")
 
 
@@ -1100,6 +1120,8 @@ def initialize_database(db_name: str, logger: logging.Logger) -> None:
                 ad_id TEXT UNIQUE NOT NULL,
                 title TEXT NOT NULL,
                 price TEXT NOT NULL,
+                location TEXT NOT NULL,
+                img_url TEXT NOT NULL,
                 first_seen TEXT NOT NULL,
                 last_checked TEXT NOT NULL
             )
