@@ -155,9 +155,6 @@ Create `config.json` by copying and modifying [`config.sample.json`](config.samp
     *   In Docker Compose: Set to `/app/config.json` by default.
     *   If not set, the script defaults to `config.json` in its current working directory.
 *   `LOG_LEVEL`: Sets the logging verbosity. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Default: `INFO`.
-*   `PYTHONDONTWRITEBYTECODE=1`: (Set in [`Dockerfile`](Dockerfile:59)) Prevents Python from writing `.pyc` files.
-*   `PYTHONUNBUFFERED=1`: (Set in [`Dockerfile`](Dockerfile:60)) Forces Python stdout and stderr streams to be unbuffered, useful for Docker logging.
-*   `DEBIAN_FRONTEND=noninteractive`: (Set in [`Dockerfile`](Dockerfile:7)) Prevents interactive prompts during Docker image build.
 
 ### Web-based Configuration Editor (`/edit`)
 
