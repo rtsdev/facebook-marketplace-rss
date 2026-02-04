@@ -51,8 +51,8 @@ RUN chmod 666 /app/config.json
 # Switch to the non-root user
 USER appuser
 
-# Install Python packages specified in requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
+RUN pip3 install uv && \
+    uv sync
 
 # Expose the port the app runs on
 EXPOSE 5000
@@ -62,4 +62,4 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Run the application
-CMD ["python3", "fb_ad_monitor.py"]
+CMD ["uv", "run", "fb_ad_monitor.py"]
