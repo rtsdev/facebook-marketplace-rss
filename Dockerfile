@@ -1,4 +1,4 @@
-FROM python:3
+FROM ghcr.io/astral-sh/uv:debian
 
 WORKDIR /app
 
@@ -11,14 +11,14 @@ RUN mkdir -m 700 ~/.gnupg && \
     apt-get update && \
     apt-get install -y firefox && \
     rm -rf /var/lib/apt/lists/* && \
-    useradd -m -s /bin/bash -u 501 appuser
+    useradd -m -s /bin/bash -u 501 appuser && \
+    chown appuser:appuser .
 
 COPY --chown=appuser:appuser . .
 
 USER appuser
 
-RUN pip3 install uv && \
-    uv sync
+RUN uv sync
 
 EXPOSE 5000
 
