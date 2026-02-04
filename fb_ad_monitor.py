@@ -17,7 +17,6 @@ from logging.handlers import RotatingFileHandler
 from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Tuple
 import waitress
-from shutil import which # For finding executables in PATH
 import shutil # For config backup
 from urllib.parse import urlparse # For URL validation
 
@@ -226,11 +225,7 @@ class fbRssAdMonitor:
             os.environ['WDM_LOCAL'] = '1' # Try to use local cache
             # Note: WDM might still log to stderr/stdout depending on its internal setup
 
-            # Use locally installed geckodriver to avoid GitHub API rate limits
-            gecko_driver_path = which('geckodriver')
-            if not gecko_driver_path:
-                self.logger.warning("geckodriver not found in PATH, falling back to webdriver-manager")
-                gecko_driver_path = GeckoDriverManager().install()
+            gecko_driver_path = GeckoDriverManager().install()
             
             # Redirect selenium service logs to /dev/null (or NUL on windows) to prevent console spam
             service_log_path = 'nul' if os.name == 'nt' else '/dev/null'

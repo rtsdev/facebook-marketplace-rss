@@ -1,8 +1,4 @@
-
-*config.json
+.idea
+.wdm
 fb-rss-feed.db
-geckodriver
-geckodriver.tar.gz
-install_geckodriver.sh
 *.log
-*.wdm
