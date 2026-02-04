@@ -399,6 +399,14 @@ class fbRssAdMonitor:
              return True # Invalid filter format, treat as passing
 
         try:
+
+            title_lower = title.lower()
+
+            exclude_keywords = filters.get('exclude', [])
+            if any(keyword.lower() in title_lower for keyword in exclude_keywords):
+                self.logger.debug(f"Ad '{title}' for URL '{url}' contains excluded keywords. Keywords: {exclude_keywords}")
+                return False
+
             # Sort levels numerically (level1, level2, ...)
             level_keys = sorted(
                 [k for k in filters.keys() if k.startswith('level') and k[5:].isdigit()],
@@ -409,9 +417,6 @@ class fbRssAdMonitor:
                  self.logger.debug(f"No valid 'levelX' keys found in filters for URL '{url}'. Ad '{title}' passes.")
                  return True # No valid levels defined
 
-            # self.logger.debug(f"Applying filters for URL '{url}' to title '{title}'. Levels: {level_keys}")
-
-            title_lower = title.lower()
             for level in level_keys:
                 keywords = filters.get(level, [])
                 if not isinstance(keywords, list):
@@ -950,6 +955,8 @@ class fbRssAdMonitor:
             if not isinstance(filters, dict):
                 return False, f"Filters for URL '{url}' must be a dictionary."
             for level_name, keywords in filters.items():
+                if level_name == 'exclude':
+                    continue
                 if not level_name.startswith("level") or not level_name[5:].isdigit():
                     return False, f"Invalid filter level name '{level_name}' for URL '{url}'."
                 if not isinstance(keywords, list):

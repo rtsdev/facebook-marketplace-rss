@@ -196,14 +196,17 @@ The application provides a web interface for easier configuration management.
         For each URL, create an entry in `url_filters`. The value is an object where keys are `levelX` (e.g., `"level1"`, `"level2"`), and values are lists of keywords.
         Example: To find 55-inch smart TVs:
         ```json
-        "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
+        {
+          "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
+            "exclude": ["roku"],
             "level1": ["tv", "television"],
             "level2": ["smart", "google tv", "android tv"],
             "level3": ["55\"", "55 inch"]
+          }
         }
         ```
         This matches ads whose titles contain:
-        (`tv` OR `television`) AND (`smart` OR `google tv` OR `android tv`) AND (`55"` OR `55 inch`).
+        ((`tv` OR `television`) AND (`smart` OR `google tv` OR `android tv`) AND (`55"` OR `55 inch`)) AND NOT `roku`.
 
 ## Running the Application
 
