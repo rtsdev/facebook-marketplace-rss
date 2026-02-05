@@ -16,7 +16,6 @@ The application uses Selenium with Firefox to browse and extract ad data, Flask 
 *   **Web-Based Configuration:** Offers an intuitive web interface (`/edit`) to manage all application settings, including URLs to monitor and keyword filters. Changes are applied dynamically where possible.
 *   **Persistent Ad Storage:** Uses an SQLite database to keep track of ads, ensuring users are notified only of new listings.
 *   **Old Ad Pruning:** Automatically removes old ad entries from the database (default: ads not seen for 14 days).
-*   **Configurable:** Settings like server IP/port, currency, refresh interval, log file, and database name can be customized.
 *   **Docker Support:** Includes a [`Dockerfile`](Dockerfile:1) and [`docker-compose.yml`](docker-compose.yml:1) for easy containerized deployment.
 *   **Logging:** Comprehensive logging with configurable log levels and file output.
 
@@ -117,12 +116,6 @@ Create `config.json` by copying and modifying [`config.sample.json`](config.samp
 
 ```json
 {
-    "server_ip": "0.0.0.0",
-    "server_port": 5000,
-    "currency": "$",
-    "refresh_interval_minutes": 15,
-    "log_filename": "fb-rssfeed.log",
-    "database_name": "fb-rss-feed.db",
     "url_filters": {
         "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
             "level1": ["tv"],
@@ -136,12 +129,6 @@ Create `config.json` by copying and modifying [`config.sample.json`](config.samp
 
 ### Configuration Parameters
 
-*   `server_ip` (String): The IP address the web server will listen on. Default: `"0.0.0.0"` (listens on all available network interfaces).
-*   `server_port` (Integer): The port the web server will run on. Default: `5000`.
-*   `currency` (String): The currency symbol used in Facebook Marketplace for your region (e.g., "$", "€", "£"). This is used to help identify price elements. Default: `"$"`
-*   `refresh_interval_minutes` (Integer): How often (in minutes) the application should check for new ads. Default: `15`.
-*   `log_filename` (String): The name of the file where logs will be stored. Default in script: `"fb_monitor.log"`, sample config: `"fb-rssfeed.log"`.
-*   `database_name` (String): The name of the SQLite database file. Default: `"fb-rss-feed.db"`.
 *   `url_filters` (Object): A dictionary where each key is a Facebook Marketplace search URL you want to monitor.
     *   The value for each URL is another dictionary defining keyword filter levels (e.g., `"level1"`, `"level2"`).
     *   Each level (e.g., `"level1"`) contains a list of keywords (strings).
@@ -164,7 +151,6 @@ The application provides a web interface for easier configuration management.
     (e.g., `http://localhost:5000/edit` if running with default settings).
 *   **Functionality:**
     *   View and modify all settings from `config.json`.
-    *   **Server Settings:** Edit Server IP, Server Port, Currency Symbol, and Refresh Interval (choose from presets or set a custom value).
     *   **URL Filters:**
         *   Add new Facebook Marketplace search URLs to monitor.
         *   For each URL, define and manage multi-level keyword filters.
@@ -174,14 +160,13 @@ The application provides a web interface for easier configuration management.
     *   When you save the configuration via the UI, the `config.json` file on the server is updated.
     *   A backup of the previous configuration is created (e.g., `config.json.bak`).
     *   The application attempts to dynamically reload the new settings:
-        *   **Dynamically Applied:** Changes to Currency, URL Filters, and Refresh Interval are typically applied without a full restart. The ad checking job will be rescheduled if the interval changes.
-        *   **Restart Required:** Changes to Server IP, Server Port, Log Filename, or Database Name will be saved to `config.json`, but a manual restart of the application is required for these specific changes to take full effect. The UI will provide a message indicating this.
+        *   **Dynamically Applied:** Changes to URL Filters are typically applied without a full restart. The ad checking job will be rescheduled if the interval changes.
 
 ### Manual `config.json` Editing
 
 1.  **Create/Locate `config.json`:**
     *   If it doesn't exist, copy [`config.sample.json`](config.sample.json:1) to `config.json` in the project's root directory.
-    *   Modify the values as needed, especially `currency` and `url_filters`.
+    *   Modify the values as needed.
 
 2.  **Configuring `url_filters` Manually:**
     *   **Get Marketplace URL:**
@@ -269,13 +254,12 @@ Once the application is running:
 
 ## Logging
 
-*   Logs are written to the file specified by `log_filename` in `config.json` (e.g., `fb-rssfeed.log`).
 *   The log level can be set using the `LOG_LEVEL` environment variable (e.g., `INFO`, `DEBUG`). Default is `INFO`.
 *   Logs are rotated, with a maximum size of 10MB and 2 backup files.
 
 ## Database
 
-*   The application uses an SQLite database (filename configured via `database_name` in `config.json`, e.g., `fb-rss-feed.db`) to store details of ads it has processed.
+*   The application uses an SQLite database to store details of ads it has processed.
 *   The database schema for the `ad_changes` table is:
     *   `id` (INTEGER, Primary Key, Auto-increment)
     *   `url` (TEXT, Ad's specific URL)
@@ -291,7 +275,7 @@ Once the application is running:
 ## How It Works
 
 1.  **Configuration Loading:** Reads settings from `config.json`.
-2.  **Scheduler:** APScheduler runs a job at the configured `refresh_interval_minutes`.
+2.  **Scheduler:** APScheduler runs a job at the configured `refresh_interval`.
 3.  **Scraping:**
     *   For each monitored URL, Selenium (with Firefox in headless mode) navigates to the page.
     *   BeautifulSoup parses the HTML content.
