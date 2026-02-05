@@ -2,7 +2,7 @@ FROM ghcr.io/astral-sh/uv:debian
 
 WORKDIR /app
 
-ENV CONFIG_FILE="${PWD}/config/config.json" \
+ENV CONFIG_FILE="./config/config.json" \
     SAMPLE_CONFIG_FILE="config.sample.json"
 
 RUN mkdir -m 700 ~/.gnupg && \

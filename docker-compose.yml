@@ -2,7 +2,9 @@
 
 services:
   fbm-rss:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: fbm-rss
     restart: always
     environment:
@@ -13,4 +15,4 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ${PWD}/config/config.json:/app/config/config.json
+      - ${PWD}/config:/app/config
