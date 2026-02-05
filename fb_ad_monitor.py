@@ -298,7 +298,6 @@ class fbRssAdMonitor:
             with open(json_file, 'r', encoding='utf-8') as file:
                 data = json.load(file)
 
-            self.currency = data.get('currency', self.currency)
             self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
             self.log_filename = data.get('log_filename', self.log_filename)
             self.database = data.get('database_name', self.database)
@@ -880,7 +879,6 @@ class fbRssAdMonitor:
     def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Validates the structure and types of the configuration data."""
         required_keys = {
-            "currency": str,
             "refresh_interval_minutes": int,
             "url_filters": dict
         }
@@ -929,11 +927,6 @@ class fbRssAdMonitor:
         self.logger.info("Attempting to reload configuration dynamically...")
         applied_dynamically = []
         requires_restart = []
-
-        new_currency = new_config.get("currency", self.currency)
-        if self.currency != new_currency:
-            self.currency = new_currency
-            applied_dynamically.append("Currency")
 
         new_url_filters = new_config.get("url_filters", self.url_filters)
         if self.url_filters != new_url_filters:
@@ -999,7 +992,6 @@ class fbRssAdMonitor:
 
             backup_path = self.config_file_path + ".bak"
             current_config_in_memory = {
-                "currency": self.currency,
                 "refresh_interval_minutes": self.refresh_interval_minutes,
                 "log_filename": self.log_filename,
                 "database_name": self.database,

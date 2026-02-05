@@ -1,6 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
     const configForm = document.getElementById('config-form');
-    const currencyInput = document.getElementById('currency');
     const refreshIntervalSelect = document.getElementById('refresh_interval_minutes');
     const refreshIntervalCustomInput = document.getElementById('refresh_interval_minutes_custom');
     const urlFiltersContainer = document.getElementById('url-filters-container');
@@ -68,7 +67,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function populateForm(config) {
-        currencyInput.value = config.currency || '$';
 
         const refreshValue = config.refresh_interval_minutes || 15;
         const standardRefreshOptions = Array.from(refreshIntervalSelect.options).map(opt => opt.value);
@@ -273,16 +271,11 @@ document.addEventListener('DOMContentLoaded', () => {
         successMessageGlobal.style.display = 'none';
 
         const formData = {
-            currency: currencyInput.value.trim(),
             refresh_interval_minutes: refreshIntervalSelect.value === 'custom' ?
                                       parseInt(refreshIntervalCustomInput.value, 10) :
                                       parseInt(refreshIntervalSelect.value, 10),
             url_filters: {}
         };
-        if (!formData.currency) {
-            displayMessage(errorMessageGlobal, "Currency symbol cannot be empty.");
-            return;
-        }
         if (isNaN(formData.refresh_interval_minutes) || formData.refresh_interval_minutes <= 0) {
             displayMessage(errorMessageGlobal, "Refresh interval must be a positive number.");
             return;
