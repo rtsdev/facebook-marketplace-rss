@@ -7,10 +7,11 @@ services:
     container_name: fb-mp-rss
     restart: always
     environment:
-      CONFIG_FILE: /app/config.json
-      REFRESH_INTERVAL: ${REFRESH_INTERVAL}
-      STALE_AD_AGE: 14
-      RSS_EXTERNAL_DOMAIN: ${RSS_EXTERNAL_DOMAIN}
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      CONFIG_FILE: "${CONFIG_FILE:-/app/config.json}"
+      REFRESH_INTERVAL: "${REFRESH_INTERVAL:-15}"
+      STALE_AD_AGE: "${STALE_AD_AGE:-14}"
+      RSS_EXTERNAL_DOMAIN: "${RSS_EXTERNAL_DOMAIN:-http://localhost:5000}"
     ports:
       - "5000:5000"
     volumes:
