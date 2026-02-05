@@ -1,10 +1,9 @@
 ---
 
 services:
-  fb-mp-rss:
+  fbm-rss:
     build: .
-    image: bethekind/fb-mp-rss:latest
-    container_name: fb-mp-rss
+    container_name: fbm-rss
     restart: always
     environment:
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
