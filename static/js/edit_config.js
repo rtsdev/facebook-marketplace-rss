@@ -142,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
         levelDiv.dataset.levelIndex = actualLevelIndex; // Store the intended level number
 
         const levelLabel = document.createElement('label');
-        levelLabel.textContent = `Level ${actualLevelIndex} Keywords:`;
+        levelLabel.textContent = actualLevelIndex === 0 ? 'Exclude Keywords' : `Level ${actualLevelIndex} Keywords:`;
         levelDiv.appendChild(levelLabel);
 
         const keywordsContainer = document.createElement('div');
@@ -167,7 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
 
-        levelDiv.appendChild(createAddButton('Add Keyword to Level ' + actualLevelIndex, () => {
+        const buttonText = actualLevelIndex === 0 ? 'Add Exclude Keyword' : `Add Keyword to Level ${actualLevelIndex}`;
+        levelDiv.appendChild(createAddButton(buttonText, () => {
             const keywordWrapper = document.createElement('div');
             keywordWrapper.className = 'keyword-wrapper';
             const newKeywordIndex = keywordsContainer.querySelectorAll('.keyword-input').length;
@@ -236,6 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
         // Sort filter levels (level1, level2, etc.) before adding
+        addFilterLevelBlock(block, 'exclude', filters.exclude, filterIndex, 0)
         const sortedLevels = Object.entries(filters)
             .filter(([key]) => key.startsWith('level') && !isNaN(parseInt(key.substring(5))))
             .sort(([keyA], [keyB]) => parseInt(keyA.substring(5)) - parseInt(keyB.substring(5)));
@@ -334,7 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const levelBlocks = block.querySelectorAll('.filter-level-block');
             levelBlocks.forEach((levelBlock) => {
                 const levelIndex = levelBlock.dataset.levelIndex; // Use the stored level index
-                const levelName = `level${levelIndex}`;
+                const levelName = levelIndex === '0' ? 'exclude' : `level${levelIndex}`;
                 formData.url_filters[url][levelName] = [];
                 const keywordInputs = levelBlock.querySelectorAll('.keyword-input');
                 let levelHasKeywords = false;

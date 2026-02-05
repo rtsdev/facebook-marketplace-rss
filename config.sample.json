@@ -7,11 +7,13 @@
     "database_name": "fb-rss-feed.db",
     "url_filters": {
         "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
+            "exclude": ["roku"],
             "level1": ["tv"],
             "level2": ["smart"],
             "level3": ["55\"", "55 inch"]
         },
         "https://www.facebook.com/marketplace/category/search?query=dishwasher&exact=false": {
+            "exclude": ["whirlpool"],
             "level1": ["dishwasher"],
             "level2": ["kitchenaid", "samsung"]
         },
