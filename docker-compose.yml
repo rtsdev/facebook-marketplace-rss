@@ -8,6 +8,7 @@ services:
     restart: always
     environment:
       CONFIG_FILE: /app/config.json
+      REFRESH_INTERVAL: ${REFRESH_INTERVAL}
       STALE_AD_AGE: 14
       RSS_EXTERNAL_DOMAIN: ${RSS_EXTERNAL_DOMAIN}
     ports:

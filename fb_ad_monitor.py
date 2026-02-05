@@ -34,6 +34,8 @@ LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 DEFAULT_LOG_LEVEL = 'INFO'
 CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
 DEFAULT_CONFIG_FILE = 'config.json'
+REFRESH_INTERVAL_ENV_VAR = 'REFRESH_INTERVAL'
+DEFAULT_REFRESH_INTERVAL = 15
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
 RSS_EXTERNAL_DOMAIN_ENV_VAR = 'RSS_EXTERNAL_DOMAIN'
@@ -67,7 +69,7 @@ class fbRssAdMonitor:
         self.server_ip: str = "0.0.0.0"
         self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
-        self.refresh_interval_minutes: int = 15
+        self.refresh_interval: int = os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL)
         self.driver: Optional[webdriver.Firefox] = None
         self.scheduler: Optional[BackgroundScheduler] = None
         self.job_lock: Lock = Lock()
@@ -224,7 +226,7 @@ class fbRssAdMonitor:
              self.logger.warning("Scheduler is already running.")
              return
 
-        self.logger.info(f"Setting up scheduler to run every {self.refresh_interval_minutes} minutes.")
+        self.logger.info(f"Setting up scheduler to run every {self.refresh_interval} minutes.")
         job_id = 'check_ads_job'
 
         if self.scheduler is None:
@@ -241,18 +243,18 @@ class fbRssAdMonitor:
                 self.check_for_new_ads,
                 'interval',
                 id=job_id,
-                minutes=self.refresh_interval_minutes,
+                minutes=self.refresh_interval,
                 misfire_grace_time=60,
                 coalesce=True,
                 next_run_time=datetime.now(self.local_tz) + timedelta(seconds=5) # Start soon
             )
             if not self.scheduler.running:
                 self.scheduler.start()
-            self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval_minutes} minutes.")
+            self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval} minutes.")
 
         except ConflictingIdError:
             self.logger.warning(f"Job '{job_id}' conflict. Attempting to reschedule.")
-            self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
+            self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval)
             if not self.scheduler.running:
                 self.scheduler.start(paused=False)
             self.logger.info(f"Scheduler resumed/rescheduled job '{job_id}'.")
@@ -284,8 +286,6 @@ class fbRssAdMonitor:
             with open(json_file, 'r', encoding='utf-8') as file:
                 data = json.load(file)
 
-            self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
-
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
                  raise ValueError("'url_filters' must be a dictionary in the config file.")
@@ -298,7 +298,6 @@ class fbRssAdMonitor:
 
             self.logger.info("Configuration loaded successfully.")
             self.logger.debug(f"Monitoring URLs: {self.urls_to_monitor}")
-            self.logger.debug(f"Refresh interval: {self.refresh_interval_minutes} minutes")
 
 
         except FileNotFoundError:
@@ -861,7 +860,6 @@ class fbRssAdMonitor:
     def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Validates the structure and types of the configuration data."""
         required_keys = {
-            "refresh_interval_minutes": int,
             "url_filters": dict
         }
         for key, expected_type in required_keys.items():
@@ -869,9 +867,6 @@ class fbRssAdMonitor:
                 return False, f"Missing required key: {key}"
             if not isinstance(data[key], expected_type):
                 return False, f"Invalid type for {key}. Expected {expected_type.__name__}, got {type(data[key]).__name__}"
-
-        if data["refresh_interval_minutes"] <= 0:
-            return False, "Refresh interval must be a positive integer."
 
         for url, filters in data["url_filters"].items():
             try:
@@ -918,24 +913,6 @@ class fbRssAdMonitor:
             if not self.urls_to_monitor:
                 self.logger.warning("No URLs to monitor after config update. Monitoring will be inactive.")
 
-        new_interval = new_config.get("refresh_interval_minutes", self.refresh_interval_minutes)
-        if self.refresh_interval_minutes != new_interval:
-            old_interval = self.refresh_interval_minutes
-            self.refresh_interval_minutes = new_interval
-            if self.scheduler and self.scheduler.running:
-                try:
-                    job_id = 'check_ads_job'
-                    self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
-                    self.logger.info(f"Rescheduled ad check job from {old_interval} to {self.refresh_interval_minutes} minutes.")
-                    applied_dynamically.append("Refresh interval")
-                except Exception as e:
-                    self.logger.error(f"Failed to reschedule job for new interval {self.refresh_interval_minutes}: {e}")
-                    self.refresh_interval_minutes = old_interval
-                    return False, f"Failed to apply new refresh interval ({new_interval} min): Scheduler error. Interval reverted to {old_interval} min."
-            else:
-                self.setup_scheduler()
-                applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
-
         message_parts = []
         if applied_dynamically:
             self.logger.info(f"Dynamically applied changes for: {', '.join(applied_dynamically)}")
@@ -966,7 +943,6 @@ class fbRssAdMonitor:
 
             backup_path = self.config_file_path + ".bak"
             current_config_in_memory = {
-                "refresh_interval_minutes": self.refresh_interval_minutes,
                 "url_filters": self.url_filters.copy()
             }
 

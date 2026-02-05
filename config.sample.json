@@ -1,5 +1,4 @@
 {
-    "refresh_interval_minutes": 15,
     "url_filters": {
         "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
             "exclude": ["roku"],
