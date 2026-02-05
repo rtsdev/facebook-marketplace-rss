@@ -2,7 +2,8 @@ FROM ghcr.io/astral-sh/uv:debian
 
 WORKDIR /app
 
-ENV CONFIG_FILE="./config/config.json"
+ENV CONFIG_FILE="${PWD}/config/config.json" \
+    SAMPLE_CONFIG_FILE="config.sample.json"
 
 RUN mkdir -m 700 ~/.gnupg && \
     install -d -m 0755 /etc/apt/keyrings && \
@@ -24,4 +25,4 @@ RUN uv sync
 
 EXPOSE 5000
 
-ENTRYPOINT ["entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
