@@ -9,6 +9,7 @@ services:
     environment:
       CONFIG_FILE: /app/config.json
       STALE_AD_AGE: 14
+      RSS_EXTERNAL_DOMAIN: ${RSS_EXTERNAL_DOMAIN}
     ports:
       - "5000:5000"
     volumes:

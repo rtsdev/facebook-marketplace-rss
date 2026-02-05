@@ -1,7 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
     const configForm = document.getElementById('config-form');
-    const serverIpInput = document.getElementById('server_ip');
-    const serverPortInput = document.getElementById('server_port');
     const currencyInput = document.getElementById('currency');
     const refreshIntervalSelect = document.getElementById('refresh_interval_minutes');
     const refreshIntervalCustomInput = document.getElementById('refresh_interval_minutes_custom');
@@ -70,8 +68,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function populateForm(config) {
-        serverIpInput.value = config.server_ip || '0.0.0.0';
-        serverPortInput.value = config.server_port || 5000;
         currencyInput.value = config.currency || '$';
 
         const refreshValue = config.refresh_interval_minutes || 15;
@@ -277,24 +273,12 @@ document.addEventListener('DOMContentLoaded', () => {
         successMessageGlobal.style.display = 'none';
 
         const formData = {
-            server_ip: serverIpInput.value.trim(),
-            server_port: parseInt(serverPortInput.value, 10),
             currency: currencyInput.value.trim(),
             refresh_interval_minutes: refreshIntervalSelect.value === 'custom' ?
                                       parseInt(refreshIntervalCustomInput.value, 10) :
                                       parseInt(refreshIntervalSelect.value, 10),
             url_filters: {}
         };
-
-        // Basic client-side validation
-        if (!formData.server_ip) {
-            displayMessage(errorMessageGlobal, "Server IP cannot be empty.");
-            return;
-        }
-        if (isNaN(formData.server_port) || formData.server_port <= 0 || formData.server_port > 65535) {
-            displayMessage(errorMessageGlobal, "Server Port must be a number between 1 and 65535.");
-            return;
-        }
         if (!formData.currency) {
             displayMessage(errorMessageGlobal, "Currency symbol cannot be empty.");
             return;

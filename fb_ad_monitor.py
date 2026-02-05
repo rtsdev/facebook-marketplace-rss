@@ -35,6 +35,8 @@ CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
 DEFAULT_CONFIG_FILE = 'config.json'
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
+RSS_EXTERNAL_DOMAIN_ENV_VAR = 'RSS_EXTERNAL_DOMAIN'
+DEFAULT_RSS_EXTERNAL_DOMAIN = 'http://localhost:5000'
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz'
 AD_LINK_TAG = "a[href*='/marketplace/item']"
@@ -63,7 +65,7 @@ class fbRssAdMonitor:
         self.local_tz = tzlocal.get_localzone()
         self.log_filename: str = "fb_monitor.log"
         self.server_ip: str = "0.0.0.0"
-        self.server_port: int = 5000
+        self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
         self.refresh_interval_minutes: int = 15
         self.driver: Optional[webdriver.Firefox] = None
@@ -92,7 +94,7 @@ class fbRssAdMonitor:
 
         self.rss_feed: PyRSS2Gen.RSS2 = PyRSS2Gen.RSS2(
             title="Facebook Marketplace Ad Feed",
-            link=f"http://{self.server_ip}:{self.server_port}/rss",
+            link=f"{self.rss_external_domain}/rss",
             description="An RSS feed to monitor new ads on Facebook Marketplace",
             lastBuildDate=datetime.now(timezone.utc),
             items=[]
@@ -296,8 +298,6 @@ class fbRssAdMonitor:
             with open(json_file, 'r', encoding='utf-8') as file:
                 data = json.load(file)
 
-            self.server_ip = data.get('server_ip', self.server_ip)
-            self.server_port = data.get('server_port', self.server_port)
             self.currency = data.get('currency', self.currency)
             self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
             self.log_filename = data.get('log_filename', self.log_filename)
@@ -880,8 +880,6 @@ class fbRssAdMonitor:
     def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Validates the structure and types of the configuration data."""
         required_keys = {
-            "server_ip": str,
-            "server_port": int,
             "currency": str,
             "refresh_interval_minutes": int,
             "url_filters": dict
@@ -892,8 +890,6 @@ class fbRssAdMonitor:
             if not isinstance(data[key], expected_type):
                 return False, f"Invalid type for {key}. Expected {expected_type.__name__}, got {type(data[key]).__name__}"
 
-        if not (0 < data["server_port"] < 65536):
-            return False, "Server port must be between 1 and 65535."
         if data["refresh_interval_minutes"] <= 0:
             return False, "Refresh interval must be a positive integer."
 
@@ -965,14 +961,6 @@ class fbRssAdMonitor:
                 self.setup_scheduler()
                 applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
 
-        new_server_ip = new_config.get("server_ip", self.server_ip)
-        new_server_port = new_config.get("server_port", self.server_port)
-        if self.server_ip != new_server_ip or self.server_port != new_server_port:
-            self.server_ip = new_server_ip
-            self.server_port = new_server_port
-            self.rss_feed.link = f"http://{self.server_ip}:{self.server_port}/rss"
-            requires_restart.append("Server IP/Port")
-
         new_log_filename = new_config.get("log_filename", self.log_filename)
         if self.log_filename != new_log_filename:
             requires_restart.append("Log filename")
@@ -1011,8 +999,6 @@ class fbRssAdMonitor:
 
             backup_path = self.config_file_path + ".bak"
             current_config_in_memory = {
-                "server_ip": self.server_ip,
-                "server_port": self.server_port,
                 "currency": self.currency,
                 "refresh_interval_minutes": self.refresh_interval_minutes,
                 "log_filename": self.log_filename,
@@ -1080,30 +1066,22 @@ class fbRssAdMonitor:
         Args:
             debug_opt (bool): Run Flask in debug mode. Defaults to False.
         """
-        self.logger.info(f"Starting Flask server on {self.server_ip}:{self.server_port}...")
+        self.logger.info(f"Starting Flask server...")
         self.setup_scheduler()
 
         try:
             if debug_opt:
                  self.logger.warning("Running Flask in DEBUG mode.")
-                 self.app.run(host=self.server_ip, port=self.server_port, debug=True, use_reloader=False)
-            else:
-                 try:
-                     from waitress import serve
-                     self.logger.info("Running Flask with Waitress production server.")
-                     serve(self.app, host=self.server_ip, port=self.server_port, threads=4)
-                 except ImportError:
-                     self.logger.warning("Waitress not found. Falling back to Flask development server.")
-                     self.logger.warning("Install waitress for a production-ready server: pip install waitress")
-                     self.app.run(host=self.server_ip, port=self.server_port, debug=False, use_reloader=False)
+
+            self.app.run(host=self.server_ip, debug=debug_opt, use_reloader=False)
 
 
         except KeyboardInterrupt:
             self.logger.info("KeyboardInterrupt received. Shutting down...")
         except SystemExit:
             self.logger.info("SystemExit received. Shutting down...")
-        except Exception as e:
-             self.logger.exception(f"Error running the application: {e}")
+        except Exception as ex:
+             self.logger.exception(f"Error running the application: {ex}")
         finally:
             self.shutdown()
 
