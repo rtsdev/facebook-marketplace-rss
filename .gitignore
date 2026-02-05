@@ -2,3 +2,4 @@
 .wdm
 fb-rss-feed.db
 *.log
+.env
