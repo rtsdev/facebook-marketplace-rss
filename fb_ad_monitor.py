@@ -29,7 +29,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.firefox import GeckoDriverManager
 
-DEFAULT_DB_NAME = 'fb-rss-feed.db'
+
+LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 DEFAULT_LOG_LEVEL = 'INFO'
 CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
 DEFAULT_CONFIG_FILE = 'config.json'
@@ -37,7 +38,6 @@ STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
 RSS_EXTERNAL_DOMAIN_ENV_VAR = 'RSS_EXTERNAL_DOMAIN'
 DEFAULT_RSS_EXTERNAL_DOMAIN = 'http://localhost:5000'
-LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz'
 AD_LINK_TAG = "a[href*='/marketplace/item']"
 AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
@@ -61,7 +61,7 @@ class fbRssAdMonitor:
 
         self.urls_to_monitor: List[str] = []
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
-        self.database: str = DEFAULT_DB_NAME
+        self.database: str = 'fbm-rss-feed.db'
         self.local_tz = tzlocal.get_localzone()
         self.log_filename: str = "fb_monitor.log"
         self.server_ip: str = "0.0.0.0"
@@ -300,7 +300,6 @@ class fbRssAdMonitor:
 
             self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
             self.log_filename = data.get('log_filename', self.log_filename)
-            self.database = data.get('database_name', self.database)
 
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
@@ -316,7 +315,6 @@ class fbRssAdMonitor:
             self.logger.debug(f"Monitoring URLs: {self.urls_to_monitor}")
             self.logger.debug(f"Refresh interval: {self.refresh_interval_minutes} minutes")
             self.logger.debug(f"Log file: {self.log_filename}")
-            self.logger.debug(f"Database: {self.database}")
 
 
         except FileNotFoundError:
@@ -958,10 +956,6 @@ class fbRssAdMonitor:
         if self.log_filename != new_log_filename:
             requires_restart.append("Log filename")
 
-        new_database_name = new_config.get("database_name", self.database)
-        if self.database != new_database_name:
-            requires_restart.append("Database name")
-
         message_parts = []
         if applied_dynamically:
             self.logger.info(f"Dynamically applied changes for: {', '.join(applied_dynamically)}")
@@ -994,7 +988,6 @@ class fbRssAdMonitor:
             current_config_in_memory = {
                 "refresh_interval_minutes": self.refresh_interval_minutes,
                 "log_filename": self.log_filename,
-                "database_name": self.database,
                 "url_filters": self.url_filters.copy()
             }
 

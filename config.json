@@ -1,6 +1,5 @@
 {
     "refresh_interval_minutes": 15,
     "log_filename": "fb-rssfeed.log",
-    "database_name": "fb-rss-feed.db",
     "url_filters": {}
 }
