@@ -13,13 +13,9 @@ RUN mkdir -m 700 ~/.gnupg && \
     echo 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' | tee /etc/apt/preferences.d/mozilla && \
     apt-get update && \
     apt-get install -y firefox && \
-    rm -rf /var/lib/apt/lists/* && \
-    useradd -m -s /bin/bash -u 501 appuser && \
-    chown appuser:appuser .
+    rm -rf /var/lib/apt/lists/*
 
-COPY --chown=appuser:appuser . .
-
-USER appuser
+COPY . .
 
 RUN uv sync
 
