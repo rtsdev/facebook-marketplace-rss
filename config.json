@@ -1,5 +1,4 @@
 {
     "refresh_interval_minutes": 15,
-    "log_filename": "fb-rssfeed.log",
     "url_filters": {}
 }

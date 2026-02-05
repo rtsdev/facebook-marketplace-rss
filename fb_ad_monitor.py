@@ -63,7 +63,7 @@ class fbRssAdMonitor:
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
         self.database: str = 'fbm-rss-feed.db'
         self.local_tz = tzlocal.get_localzone()
-        self.log_filename: str = "fb_monitor.log"
+        self.log_filename: str = "fbm-rss-feed.log"
         self.server_ip: str = "0.0.0.0"
         self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
@@ -74,20 +74,6 @@ class fbRssAdMonitor:
 
         self.logger = logging.getLogger(__name__)
         self.set_logger()
-
-        try:
-            original_log_filename = self.log_filename
-            self.load_from_json(self.config_file_path)
-
-            if self.log_filename != original_log_filename:
-                self.logger.info(f"Log filename updated from '{original_log_filename}' to '{self.log_filename}'. Re-initializing logger file handler.")
-                self.set_logger()
-        except Exception as e:
-            if self.logger and hasattr(self.logger, 'critical'):
-                self.logger.critical(f"Fatal error during configuration loading: {e}", exc_info=True)
-            else:
-                print(f"CRITICAL FALLBACK: Fatal error during configuration loading and logger unavailable: {e}")
-            raise
 
         self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
         self._setup_routes()
@@ -299,7 +285,6 @@ class fbRssAdMonitor:
                 data = json.load(file)
 
             self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
-            self.log_filename = data.get('log_filename', self.log_filename)
 
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
@@ -314,7 +299,6 @@ class fbRssAdMonitor:
             self.logger.info("Configuration loaded successfully.")
             self.logger.debug(f"Monitoring URLs: {self.urls_to_monitor}")
             self.logger.debug(f"Refresh interval: {self.refresh_interval_minutes} minutes")
-            self.logger.debug(f"Log file: {self.log_filename}")
 
 
         except FileNotFoundError:
@@ -952,10 +936,6 @@ class fbRssAdMonitor:
                 self.setup_scheduler()
                 applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
 
-        new_log_filename = new_config.get("log_filename", self.log_filename)
-        if self.log_filename != new_log_filename:
-            requires_restart.append("Log filename")
-
         message_parts = []
         if applied_dynamically:
             self.logger.info(f"Dynamically applied changes for: {', '.join(applied_dynamically)}")
@@ -987,7 +967,6 @@ class fbRssAdMonitor:
             backup_path = self.config_file_path + ".bak"
             current_config_in_memory = {
                 "refresh_interval_minutes": self.refresh_interval_minutes,
-                "log_filename": self.log_filename,
                 "url_filters": self.url_filters.copy()
             }
 
