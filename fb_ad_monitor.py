@@ -69,7 +69,8 @@ class fbRssAdMonitor:
         self.server_ip: str = "0.0.0.0"
         self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
-        self.refresh_interval: int = os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL)
+        self.refresh_interval: int = int(os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL))
+        self.stale_ad_age: int = int(os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
         self.driver: Optional[webdriver.Firefox] = None
         self.scheduler: Optional[BackgroundScheduler] = None
         self.job_lock: Lock = Lock()
@@ -687,7 +688,7 @@ class fbRssAdMonitor:
                 finally:
                      time.sleep(2)
 
-            self.prune_old_ads(conn, os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
+            self.prune_old_ads(conn, self.stale_ad_age)
 
             self.logger.info(f"Finished ad check. Added {new_ads_added_count} new ads.")
 
