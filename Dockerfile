@@ -2,6 +2,8 @@ FROM ghcr.io/astral-sh/uv:debian
 
 WORKDIR /app
 
+ENV CONFIG_FILE="./config/config.json"
+
 RUN mkdir -m 700 ~/.gnupg && \
     install -d -m 0755 /etc/apt/keyrings && \
     wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null && \
@@ -22,4 +24,4 @@ RUN uv sync
 
 EXPOSE 5000
 
-CMD ["uv", "run", "fb_ad_monitor.py"]
+ENTRYPOINT ["entrypoint.sh"]

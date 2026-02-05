@@ -32,8 +32,7 @@ from webdriver_manager.firefox import GeckoDriverManager
 
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 DEFAULT_LOG_LEVEL = 'INFO'
-CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
-DEFAULT_CONFIG_FILE = 'config.json'
+CONFIG_DIR = f"{os.getcwd()}/config"
 REFRESH_INTERVAL_ENV_VAR = 'REFRESH_INTERVAL'
 DEFAULT_REFRESH_INTERVAL = 15
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
@@ -51,21 +50,18 @@ FACEBOOK_BASE_URL = "https://facebook.com"
 class fbRssAdMonitor:
     """Monitors Facebook Marketplace search URLs for new ads and generates an RSS feed."""
 
-    def __init__(self, json_file: str):
+    def __init__(self):
         """
         Initializes the fbRssAdMonitor instance.
-
-        Args:
-            json_file (str): Path to the configuration JSON file.
         """
-        self.config_file_path: str = json_file
+        self.config_file_path: str = f"{CONFIG_DIR}/config.json"
         self.config_lock: RLock = RLock()
 
         self.urls_to_monitor: List[str] = []
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
-        self.database: str = 'fbm-rss-feed.db'
+        self.database: str = f"{CONFIG_DIR}/fbm-rss-feed.db"
         self.local_tz = tzlocal.get_localzone()
-        self.log_filename: str = "fbm-rss-feed.log"
+        self.log_filename: str = f"{CONFIG_DIR}/fbm-rss-feed.log"
         self.server_ip: str = "0.0.0.0"
         self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
@@ -77,6 +73,8 @@ class fbRssAdMonitor:
 
         self.logger = logging.getLogger(__name__)
         self.set_logger()
+
+        self.load_from_json(self.config_file_path)
 
         self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
         self._setup_routes()
@@ -1084,16 +1082,9 @@ if __name__ == "__main__":
     init_logger.addHandler(init_handler)
     init_logger.setLevel(logging.INFO)
 
-    config_file = os.getenv(CONFIG_FILE_ENV_VAR, DEFAULT_CONFIG_FILE)
-    init_logger.info(f"Using configuration file: {config_file}")
-
-    if not os.path.exists(config_file):
-        init_logger.error(f"Error: Config file '{config_file}' not found!")
-        exit(1)
-
     monitor_instance = None
     try:
-        monitor_instance = fbRssAdMonitor(json_file=config_file)
+        monitor_instance = fbRssAdMonitor()
         initialize_database(monitor_instance.database, monitor_instance.logger)
         monitor_instance.run(debug_opt=False)
 
