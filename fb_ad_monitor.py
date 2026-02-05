@@ -643,11 +643,13 @@ class fbRssAdMonitor:
                             self.logger.info(f"New ad detected: '{title}' ({price}) - {ad_url}")
                             description = f"""
                             Title: {title}
+                            <br>
                             Price: {price}
+                            <br>
                             Location: {location}
                             """
                             new_item = PyRSS2Gen.RSSItem(
-                                title=f"{title} - {price} - {location}",
+                                title=f"{title} | {price} | {location}",
                                 link=ad_url,
                                 description=description,
                                 enclosure=PyRSS2Gen.Enclosure(img_url, 0, "image/jpeg"),
@@ -757,12 +759,14 @@ class fbRssAdMonitor:
 
                     description = f"""
                     Title: {change['title']}
+                    <br>
                     Price: {change['price']}
+                    <br>
                     Location: {change['location']}
                     """
 
                     new_item = PyRSS2Gen.RSSItem(
-                        title=f"{change['title']} - {change['price']} - {change['location']}",
+                        title=f"{change['title']} | {change['price']} | {change['location']}",
                         link=change['url'],
                         description=description,
                         enclosure=PyRSS2Gen.Enclosure(change['img_url'], 0, "image/jpeg"),
