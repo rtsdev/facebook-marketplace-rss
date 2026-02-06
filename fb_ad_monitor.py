@@ -503,7 +503,7 @@ class fbRssAdMonitor:
                 ad_id_hash = self.get_ads_hash(full_url)
 
                 if self.apply_filters(source_url, listing.get('title')):
-                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url').split('?')[0], full_url))
+                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url'), full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
