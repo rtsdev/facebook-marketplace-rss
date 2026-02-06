@@ -17,17 +17,9 @@ import requests
 import tzlocal
 from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
-from bs4 import BeautifulSoup
 from dateutil import parser
 from flask import Flask, Response, jsonify, request, render_template, make_response, abort
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException, TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.firefox.service import Service as FirefoxService
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.firefox import GeckoDriverManager
+from playwright.sync_api import sync_playwright, Browser
 
 
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
@@ -67,7 +59,7 @@ class fbRssAdMonitor:
         self.currency: str = "$"
         self.refresh_interval: int = int(os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL))
         self.stale_ad_age: int = int(os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
-        self.driver: Optional[webdriver.Firefox] = None
+        self.browser: Optional[Browser] = None
         self.scheduler: Optional[BackgroundScheduler] = None
         self.job_lock: Lock = Lock()
 
@@ -129,92 +121,29 @@ class fbRssAdMonitor:
         console_handler.setLevel(log_level)
 
         self.logger.setLevel(log_level)
-        # self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
         self.logger.info(f"Logger initialized with level {logging.getLevelName(log_level)}")
 
 
-    def init_selenium(self) -> None:
+    def init_playwright(self) -> None:
         """
-        Initializes Selenium WebDriver with Firefox options.
-        Ensures any existing driver is quit first.
+        Initializes Playwright Browser.
         """
-        self.quit_selenium()
-
-        try:
-            self.logger.debug("Initializing Selenium WebDriver...")
-            firefox_options = FirefoxOptions()
-            possible_paths = [
-                "/opt/homebrew/bin/firefox",
-                "/Applications/Firefox.app/Contents/MacOS/firefox",
-                "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox",
-                "/usr/bin/firefox",
-                "/usr/lib/firefox/firefox",
-                "/snap/bin/firefox",
-                "/opt/firefox/firefox",
-                "/usr/local/bin/firefox",
-                "/app/firefox/firefox",
-                "/firefox/firefox",
-                "/usr/bin/firefox-esr",
-                "/usr/lib/firefox-esr/firefox-esr"
-            ]
-            
-            firefox_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    firefox_path = path
-                    break
-            
-            if firefox_path:
-                firefox_options.binary_location = firefox_path
-                self.logger.debug(f"Using Firefox binary at: {firefox_path}")
-            else:
-                self.logger.warning("Firefox binary not found in standard locations. Letting webdriver-manager handle it automatically.")
-            firefox_options.add_argument("--no-sandbox")
-            firefox_options.add_argument("--disable-dev-shm-usage")
-            firefox_options.add_argument("--private")
-            firefox_options.add_argument("--headless")
-            firefox_options.set_preference("general.useragent.override", SELENIUM_USER_AGENT)
-            firefox_options.set_preference("dom.webdriver.enabled", False)
-            firefox_options.set_preference("useAutomationExtension", False)
-            firefox_options.set_preference("privacy.resistFingerprinting", True)
-
-            log_level_gecko = logging.WARNING if self.logger.level > logging.DEBUG else logging.DEBUG
-            os.environ['WDM_LOG_LEVEL'] = str(log_level_gecko)
-            os.environ['WDM_LOCAL'] = '1'
-
-            gecko_driver_path = GeckoDriverManager().install()
-
-            service_log_path = 'nul' if os.name == 'nt' else '/dev/null'
-            self.driver = webdriver.Firefox(
-                service=FirefoxService(gecko_driver_path, log_path=service_log_path),
-                options=firefox_options
-            )
-            self.logger.debug("Selenium WebDriver initialized successfully.")
-
-        except WebDriverException as e:
-            self.logger.error(f"WebDriverException during Selenium initialization: {e}")
-            self.driver = None
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error initializing Selenium: {e}")
-            self.driver = None
-            raise
+        with sync_playwright() as p:
+            self.browser = p.chromium.launch(headless=True)
 
 
-    def quit_selenium(self) -> None:
-        """Safely quits the Selenium WebDriver if it exists."""
-        if self.driver:
-            self.logger.debug("Quitting Selenium WebDriver...")
+    def close_browser(self) -> None:
+        """Safely quits the Playwright browser if it exists."""
+        if self.browser:
+            self.logger.debug("Quitting Playwright browser...")
             try:
-                self.driver.quit()
-                self.logger.debug("Selenium WebDriver quit successfully.")
-            except WebDriverException as e:
-                self.logger.error(f"Error quitting Selenium WebDriver: {e}")
-            except Exception as e:
-                 self.logger.error(f"Unexpected error quitting Selenium WebDriver: {e}")
+                self.browser.close()
+                self.logger.debug("Playwright browser quit successfully.")
+            except Exception as ex:
+                self.logger.error(f"Error quitting Playwright browser: {ex}")
             finally:
-                self.driver = None
+                self.browser = None
 
 
     def setup_scheduler(self) -> None:
@@ -379,20 +308,9 @@ class fbRssAdMonitor:
             return False
 
 
-    def save_html(self, soup: BeautifulSoup, filename: str = 'output.html') -> None:
-        """Saves the prettified HTML content of a BeautifulSoup object to a file."""
-        try:
-            html_content = soup.prettify()
-            with open(filename, 'w', encoding='utf-8') as file:
-                file.write(html_content)
-            self.logger.debug(f"HTML content saved to {filename}")
-        except Exception as e:
-            self.logger.error(f"Error saving HTML to {filename}: {e}")
-
-
-    def get_page_content(self, url: str, max_retries: int = 2) -> Optional[str]:
+    def get_page_content(self, url: str) -> list[dict]:
         """
-        Fetches the page content using Selenium with retry mechanism.
+        Fetches the page content using Playwright with retry mechanism.
 
         Args:
             url (str): The URL of the page to fetch.
@@ -401,67 +319,148 @@ class fbRssAdMonitor:
         Returns:
             Optional[str]: The HTML content of the page, or None if an error occurred.
         """
-        if not self.driver:
-             self.logger.error("Selenium driver not initialized. Cannot fetch page content.")
-             return None
-        
-        for attempt in range(max_retries + 1):
+
+        listings = []
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = context.new_page()
+
+        self.logger.info(f"Requesting URL: {url}")
+        page.goto(url, wait_until='networkidle')
+        page.wait_for_timeout(5000)
+
+        page.keyboard.press('Escape')
+
+        # Scroll down to load more listings
+        self.logger.info("Scrolling to load all listings...")
+        max_scrolls = 50
+        previous_count = 0
+        no_change_count = 0
+        max_no_change = 5  # Stop after 5 scrolls with no new listings
+        scroll_count = 0
+
+        listing_links = page.locator('a[href*="/marketplace/item/"]')
+        listing_links.first.wait_for(timeout=10000)
+
+        while no_change_count < max_no_change and scroll_count < max_scrolls:
+            current_count = listing_links.count()
+
+            if current_count > previous_count:
+                new_items = current_count - previous_count
+                self.logger.info(f"Scroll {scroll_count + 1}: Found {current_count} listings (+{new_items} new)")
+                previous_count = current_count
+                no_change_count = 0
+            else:
+                no_change_count += 1
+                self.logger.info(f"Scroll {scroll_count + 1}: No new listings ({no_change_count}/{max_no_change})")
+
+            page.keyboard.press('PageDown')
+            page.keyboard.press('PageDown')
+            page.keyboard.press('PageDown')
+            page.wait_for_timeout(5000)
+            time.sleep(5)
+            scroll_count += 1
+
+        # Final count
+        listing_links = page.locator('a[href*="/marketplace/item/"]')
+        count = listing_links.count()
+        self.logger.info(f"\nTotal listings found after scrolling: {count}")
+        self.logger.info("Extracting listing details...\n")
+
+        listings = self._extract_listing_data(page, listing_links, count)
+
+        context.close()
+
+        return listings
+
+
+    def _extract_listing_data(self, page, listing_links, count: int) -> List[Dict]:
+        """
+        Helper function to extract data from listing elements
+
+        Args:
+            page: Playwright page object
+            listing_links: Locator for listing links
+            count: Number of listings
+
+        Returns:
+            List of listing dictionaries
+        """
+        listings = []
+
+        for i in range(count):
             try:
-                self.logger.info(f"Requesting URL: {url} (attempt {attempt + 1}/{max_retries + 1})")
-                self.driver.get(url)
+                listing = listing_links.nth(i)
 
-                try:
+                # Extract the URL
+                href = listing.get_attribute('href')
 
-                    WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, AD_DIV_SELECTOR))
-                    )
-                except TimeoutException:
+                # Extract price
+                price_elem = listing.locator('span:has-text("$")').first
+                price = price_elem.inner_text() if price_elem.count() > 0 else "N/A"
 
-                    try:
-                        WebDriverWait(self.driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='main'], div[data-pagelet='MarketplacePDP'], main"))
-                        )
-                        self.logger.warning(f"Using fallback selector for {url} - AD_DIV_SELECTOR may be outdated")
-                    except TimeoutException:
+                # Extract title - look for the longer text that's not the price or location
+                # It's in a span with specific classes that shows 2 lines
+                title_elem = listing.locator('span[style*="-webkit-line-clamp: 2"]')
+                title = title_elem.inner_text() if title_elem.count() > 0 else None
 
-                        WebDriverWait(self.driver, 5).until(
-                            EC.presence_of_element_located((By.TAG_NAME, "body"))
-                        )
-                        self.logger.warning(f"Using body tag fallback for {url} - page structure may have changed")
+                # If title not found, try to get it from image alt text
+                if not title or title == "N/A":
+                    img = listing.locator('img').first
+                    if img.count() > 0:
+                        image_alt = img.get_attribute('alt')
+                        if image_alt:
+                            # Extract title from alt text (format: "Title in Location")
+                            title = image_alt.split(' in ')[0] if ' in ' in image_alt else image_alt
 
-                WebDriverWait(self.driver, 5).until(
-                    lambda driver: driver.execute_script("return document.readyState") == "complete"
-                )
-                
-                self.logger.debug(f"Page content loaded successfully for {url}")
-                return self.driver.page_source
-                
-            except WebDriverException as e:
-                if attempt == max_retries:
-                    self.logger.error(f"Selenium error fetching page content for {url} after {max_retries + 1} attempts: {e}")
+                title = title if title else "N/A"
 
-                    try:
-                        page_source = self.driver.page_source if self.driver else "No driver available"
-                        error_filename = f"error_page_{int(time.time())}.html"
-                        with open(error_filename, "w", encoding="utf-8") as f:
-                            f.write(f"<!-- Error: {e} -->\n")
-                            f.write(f"<!-- URL: {url} -->\n")
-                            f.write(page_source)
-                        self.logger.info(f"Saved error page source to {error_filename}")
-                    except Exception as save_err:
-                         self.logger.error(f"Could not save page source on error: {save_err}")
-                    return None
-                else:
-                    self.logger.warning(f"Selenium error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)
-                    
-            except Exception as e:
-                if attempt == max_retries:
-                    self.logger.exception(f"Unexpected error fetching page content for {url} after {max_retries + 1} attempts: {e}")
-                    return None
-                else:
-                    self.logger.warning(f"Unexpected error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)
+                # Extract location - usually has comma in it and comes after title
+                location_elems = listing.locator('span:has-text(",")').all()
+                location = "N/A"
+                for loc_elem in location_elems:
+                    text = loc_elem.inner_text()
+                    # Skip if it's the price or doesn't look like a location
+                    if '$' not in text and len(text) < 50:
+                        location = text
+                        break
+
+                # Extract image URL
+                img = listing.locator('img').first
+                image_url = img.get_attribute('src') if img.count() > 0 else "N/A"
+                image_alt = img.get_attribute('alt') if img.count() > 0 else "N/A"
+
+                # Extract listing ID from the URL
+                listing_id = "N/A"
+                if href and '/marketplace/item/' in href:
+                    parts = href.split('/marketplace/item/')
+                    if len(parts) > 1:
+                        listing_id = parts[1].split('/')[0].split('?')[0]
+
+                listing_data = {
+                    'id': listing_id,
+                    'title': title.strip(),
+                    'price': price.strip(),
+                    'location': location.strip(),
+                    'url': f"https://www.facebook.com{href}" if href and not href.startswith(
+                        'http') else href if href else "N/A",
+                    'image_url': image_url,
+                    'image_alt': image_alt
+                }
+
+                listings.append(listing_data)
+
+                # Print progress every 10 items
+                if (i + 1) % 10 == 0 or i == 0:
+                    self.logger.info(f"Extracted {i + 1}/{count}: {listing_data['title'][:50]}... - {listing_data['price']}")
+
+            except Exception as ex:
+                self.logger.info(f"Error extracting listing {i}: {str(ex)}")
+                continue
+
+        return listings
 
 
     def get_ads_hash(self, content: str) -> str:
@@ -477,7 +476,7 @@ class fbRssAdMonitor:
         return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
-    def extract_ad_details(self, content: str, source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def extract_ad_details(self, listings: list[dict], source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
         """
         Extracts ad details from the page HTML content and applies URL-specific filters.
 
@@ -492,67 +491,20 @@ class fbRssAdMonitor:
         """
         ads_found: List[Tuple[str, str, str, str, str, str]] = []
         try:
-            soup = BeautifulSoup(content, 'html.parser')
-
-            ad_links = soup.select(AD_LINK_TAG)
-            self.logger.debug(f"Found {len(ad_links)} potential ad links on {source_url}.")
-
             processed_urls = set()
 
-            for ad_link in ad_links:
-                href = ad_link.get('href', '')
+            for listing in listings:
 
-                full_url = f"{FACEBOOK_BASE_URL}{href.split('?')[0]}"
+                full_url = f"{FACEBOOK_BASE_URL}{listing.get('url').split('?')[0]}"
 
                 if full_url in processed_urls:
                      continue
                 processed_urls.add(full_url)
 
+                ad_id_hash = self.get_ads_hash(full_url)
 
-                title = None
-                price = None
-                location = None
-                image_url = None
-
-                spans = ad_link.select('span')
-
-                for span in spans:
-                    span_text = span.get_text(strip=True)
-
-                    if AD_TITLE_SELECTOR_STYLE in span.attrs.get('style', ''):
-                        title = span_text
-                    elif span.attrs.get('dir', '') == AD_PRICE_SELECTOR_DIR :
-                        if span_text.startswith(self.currency) or 'free' in span_text.lower():
-                            price = span_text
-                    elif re.match(r"^[A-Za-z .'-]+,\s?[A-Z]{2}$", span.get_text(strip=True)):
-                        location = span.get_text(strip=True)
-                    else:
-                        pass
-
-                image_el = ad_link.find('img')
-                if image_el:
-                    image_url = image_el.get('src')
-
-                if not title or not price:
-                    all_spans = ad_link.find_all('span')
-                    for span in all_spans:
-                        span_text = span.get_text(strip=True)
-                        if span_text and len(span_text) > 10 and not title:
-                            title = span_text
-                        elif span_text and (span_text.startswith(self.currency) or 'free' in span_text.lower()) and not price:
-                            price = span_text
-
-                if not title:
-                    link_text = ad_link.get_text(strip=True)
-                    if link_text and len(link_text) > 10:
-                        title = link_text
-                
-                if title and price:
-                    if price.startswith(self.currency) or 'free' in price.lower():
-                        ad_id_hash = self.get_ads_hash(full_url)
-
-                        if self.apply_filters(source_url, title):
-                            ads_found.append((ad_id_hash, title, price, location, image_url, full_url))
+                if self.apply_filters(source_url, listing.get('title')):
+                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url'), full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
@@ -611,28 +563,29 @@ class fbRssAdMonitor:
                 processed_urls_count += 1
                 self.logger.info(f"Processing URL ({processed_urls_count}/{len(self.urls_to_monitor)}): {url}")
                 try:
-                    self.init_selenium()
-                    if not self.driver:
-                         self.logger.warning(f"Skipping URL {url} due to Selenium initialization failure.")
-                         continue
+                    with sync_playwright() as p:
+                        self.browser = p.chromium.launch(headless=True)
+                        if not self.browser:
+                            self.logger.warning(f"Skipping URL {url} due to Playwright initialization failure.")
+                            continue
 
-                    content = self.get_page_content(url)
-                    self.quit_selenium()
+                        listings = self.get_page_content(url)
 
-                    if content is None:
+                        self.browser.close()
+
+                    if listings is None:
                         self.logger.warning(f"No content received for URL: {url}. Skipping.")
                         continue
 
-                    ads = self.extract_ad_details(content, url)
+                    ads = self.extract_ad_details(listings, url)
                     if not ads:
-                         self.logger.info(f"No matching ads found or extracted for URL: {url}.")
-                         continue
-
+                        self.logger.info(f"No matching ads found or extracted for URL: {url}.")
+                        continue
 
                     for ad_id, title, price, location, img_url, ad_url in ads:
                         if ad_id in added_ad_ids_this_run:
-                             self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
-                             continue
+                            self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
+                            continue
 
                         cursor.execute('SELECT ad_id FROM ad_changes WHERE ad_id = ?', (ad_id,))
                         existing_ad = cursor.fetchone()
@@ -667,24 +620,24 @@ class fbRssAdMonitor:
                                 new_ads_added_count += 1
                                 self.logger.debug(f"Successfully added new ad '{title}' to DB and RSS feed.")
                             except sqlite3.IntegrityError:
-                                self.logger.warning(f"IntegrityError inserting ad '{title}' ({ad_id}). Might be a race condition. Updating last_checked.")
+                                self.logger.warning(
+                                    f"IntegrityError inserting ad '{title}' ({ad_id}). Might be a race condition. Updating last_checked.")
                                 cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
                                                (now_iso, ad_id))
                                 conn.commit()
                             except sqlite3.Error as db_err:
-                                 self.logger.error(f"Database error processing ad '{title}' ({ad_id}): {db_err}")
-                                 conn.rollback()
+                                self.logger.error(f"Database error processing ad '{title}' ({ad_id}): {db_err}")
+                                conn.rollback()
 
                         else:
-                             self.logger.debug(f"Existing ad found: '{title}' ({ad_id}). Updating last_checked.")
-                             cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
-                                            (now_iso, ad_id))
-                             conn.commit()
+                            self.logger.debug(f"Existing ad found: '{title}' ({ad_id}). Updating last_checked.")
+                            cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
+                                           (now_iso, ad_id))
+                            conn.commit()
 
 
                 except Exception as url_proc_err:
                      self.logger.exception(f"Error processing URL {url}: {url_proc_err}")
-                     self.quit_selenium()
                 finally:
                      time.sleep(2)
 
@@ -699,7 +652,6 @@ class fbRssAdMonitor:
         except Exception as e:
             self.logger.exception(f"Unexpected error during ad check: {e}")
         finally:
-            self.quit_selenium()
             if conn:
                 conn.close()
                 self.logger.debug("Database connection closed.")
@@ -809,6 +761,7 @@ class fbRssAdMonitor:
              self.logger.exception(f"Error converting RSS feed to XML: {e}")
              return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
 
+
     def _setup_routes(self) -> None:
         """Sets up Flask routes."""
         self.app.add_url_rule('/rss', 'rss', self.rss)
@@ -816,6 +769,7 @@ class fbRssAdMonitor:
         self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
         self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
         self.app.add_url_rule('/api/img-proxy', 'img-proxy', self.img_proxy, methods=['GET'])
+
 
     def img_proxy(self):
         try:

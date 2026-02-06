@@ -17,7 +17,8 @@ RUN mkdir -m 700 ~/.gnupg && \
 
 COPY . .
 
-RUN uv sync
+RUN uv sync && \
+    playwright install --with-deps --only-shell
 
 EXPOSE 5000
 
