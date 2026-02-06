@@ -17,25 +17,20 @@ import requests
 import tzlocal
 from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
-from bs4 import BeautifulSoup
 from dateutil import parser
 from flask import Flask, Response, jsonify, request, render_template, make_response, abort
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException, TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.firefox.service import Service as FirefoxService
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.firefox import GeckoDriverManager
+from playwright.sync_api import sync_playwright, Browser
 
-DEFAULT_DB_NAME = 'fb-rss-feed.db'
+
+LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 DEFAULT_LOG_LEVEL = 'INFO'
-CONFIG_FILE_ENV_VAR = 'CONFIG_FILE'
-DEFAULT_CONFIG_FILE = 'config.json'
+CONFIG_DIR = f"{os.getcwd()}/config"
+REFRESH_INTERVAL_ENV_VAR = 'REFRESH_INTERVAL'
+DEFAULT_REFRESH_INTERVAL = 15
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
-LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
+RSS_EXTERNAL_DOMAIN_ENV_VAR = 'RSS_EXTERNAL_DOMAIN'
+DEFAULT_RSS_EXTERNAL_DOMAIN = 'http://localhost:5000'
 AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz'
 AD_LINK_TAG = "a[href*='/marketplace/item']"
 AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
@@ -47,52 +42,38 @@ FACEBOOK_BASE_URL = "https://facebook.com"
 class fbRssAdMonitor:
     """Monitors Facebook Marketplace search URLs for new ads and generates an RSS feed."""
 
-    def __init__(self, json_file: str):
+    def __init__(self):
         """
         Initializes the fbRssAdMonitor instance.
-
-        Args:
-            json_file (str): Path to the configuration JSON file.
         """
-        self.config_file_path: str = json_file
+        self.config_file_path: str = f"{CONFIG_DIR}/config.json"
         self.config_lock: RLock = RLock()
 
         self.urls_to_monitor: List[str] = []
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
-        self.database: str = DEFAULT_DB_NAME
+        self.database: str = f"{CONFIG_DIR}/fbm-rss-feed.db"
         self.local_tz = tzlocal.get_localzone()
-        self.log_filename: str = "fb_monitor.log"
+        self.log_filename: str = f"{CONFIG_DIR}/fbm-rss-feed.log"
         self.server_ip: str = "0.0.0.0"
-        self.server_port: int = 5000
+        self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
-        self.refresh_interval_minutes: int = 15
-        self.driver: Optional[webdriver.Firefox] = None
+        self.refresh_interval: int = int(os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL))
+        self.stale_ad_age: int = int(os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
+        self.browser: Optional[Browser] = None
         self.scheduler: Optional[BackgroundScheduler] = None
         self.job_lock: Lock = Lock()
 
         self.logger = logging.getLogger(__name__)
         self.set_logger()
 
-        try:
-            original_log_filename = self.log_filename
-            self.load_from_json(self.config_file_path)
-
-            if self.log_filename != original_log_filename:
-                self.logger.info(f"Log filename updated from '{original_log_filename}' to '{self.log_filename}'. Re-initializing logger file handler.")
-                self.set_logger()
-        except Exception as e:
-            if self.logger and hasattr(self.logger, 'critical'):
-                self.logger.critical(f"Fatal error during configuration loading: {e}", exc_info=True)
-            else:
-                print(f"CRITICAL FALLBACK: Fatal error during configuration loading and logger unavailable: {e}")
-            raise
+        self.load_from_json(self.config_file_path)
 
         self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
         self._setup_routes()
 
         self.rss_feed: PyRSS2Gen.RSS2 = PyRSS2Gen.RSS2(
             title="Facebook Marketplace Ad Feed",
-            link=f"http://{self.server_ip}:{self.server_port}/rss",
+            link=f"{self.rss_external_domain}/rss",
             description="An RSS feed to monitor new ads on Facebook Marketplace",
             lastBuildDate=datetime.now(timezone.utc),
             items=[]
@@ -140,92 +121,29 @@ class fbRssAdMonitor:
         console_handler.setLevel(log_level)
 
         self.logger.setLevel(log_level)
-        # self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
         self.logger.info(f"Logger initialized with level {logging.getLevelName(log_level)}")
 
 
-    def init_selenium(self) -> None:
+    def init_playwright(self) -> None:
         """
-        Initializes Selenium WebDriver with Firefox options.
-        Ensures any existing driver is quit first.
+        Initializes Playwright Browser.
         """
-        self.quit_selenium()
-
-        try:
-            self.logger.debug("Initializing Selenium WebDriver...")
-            firefox_options = FirefoxOptions()
-            possible_paths = [
-                "/opt/homebrew/bin/firefox",
-                "/Applications/Firefox.app/Contents/MacOS/firefox",
-                "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox",
-                "/usr/bin/firefox",
-                "/usr/lib/firefox/firefox",
-                "/snap/bin/firefox",
-                "/opt/firefox/firefox",
-                "/usr/local/bin/firefox",
-                "/app/firefox/firefox",
-                "/firefox/firefox",
-                "/usr/bin/firefox-esr",
-                "/usr/lib/firefox-esr/firefox-esr"
-            ]
-            
-            firefox_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    firefox_path = path
-                    break
-            
-            if firefox_path:
-                firefox_options.binary_location = firefox_path
-                self.logger.debug(f"Using Firefox binary at: {firefox_path}")
-            else:
-                self.logger.warning("Firefox binary not found in standard locations. Letting webdriver-manager handle it automatically.")
-            firefox_options.add_argument("--no-sandbox")
-            firefox_options.add_argument("--disable-dev-shm-usage")
-            firefox_options.add_argument("--private")
-            firefox_options.add_argument("--headless")
-            firefox_options.set_preference("general.useragent.override", SELENIUM_USER_AGENT)
-            firefox_options.set_preference("dom.webdriver.enabled", False)
-            firefox_options.set_preference("useAutomationExtension", False)
-            firefox_options.set_preference("privacy.resistFingerprinting", True)
-
-            log_level_gecko = logging.WARNING if self.logger.level > logging.DEBUG else logging.DEBUG
-            os.environ['WDM_LOG_LEVEL'] = str(log_level_gecko)
-            os.environ['WDM_LOCAL'] = '1'
-
-            gecko_driver_path = GeckoDriverManager().install()
-
-            service_log_path = 'nul' if os.name == 'nt' else '/dev/null'
-            self.driver = webdriver.Firefox(
-                service=FirefoxService(gecko_driver_path, log_path=service_log_path),
-                options=firefox_options
-            )
-            self.logger.debug("Selenium WebDriver initialized successfully.")
-
-        except WebDriverException as e:
-            self.logger.error(f"WebDriverException during Selenium initialization: {e}")
-            self.driver = None
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error initializing Selenium: {e}")
-            self.driver = None
-            raise
+        with sync_playwright() as p:
+            self.browser = p.chromium.launch(headless=True)
 
 
-    def quit_selenium(self) -> None:
-        """Safely quits the Selenium WebDriver if it exists."""
-        if self.driver:
-            self.logger.debug("Quitting Selenium WebDriver...")
+    def close_browser(self) -> None:
+        """Safely quits the Playwright browser if it exists."""
+        if self.browser:
+            self.logger.debug("Quitting Playwright browser...")
             try:
-                self.driver.quit()
-                self.logger.debug("Selenium WebDriver quit successfully.")
-            except WebDriverException as e:
-                self.logger.error(f"Error quitting Selenium WebDriver: {e}")
-            except Exception as e:
-                 self.logger.error(f"Unexpected error quitting Selenium WebDriver: {e}")
+                self.browser.close()
+                self.logger.debug("Playwright browser quit successfully.")
+            except Exception as ex:
+                self.logger.error(f"Error quitting Playwright browser: {ex}")
             finally:
-                self.driver = None
+                self.browser = None
 
 
     def setup_scheduler(self) -> None:
@@ -236,7 +154,7 @@ class fbRssAdMonitor:
              self.logger.warning("Scheduler is already running.")
              return
 
-        self.logger.info(f"Setting up scheduler to run every {self.refresh_interval_minutes} minutes.")
+        self.logger.info(f"Setting up scheduler to run every {self.refresh_interval} minutes.")
         job_id = 'check_ads_job'
 
         if self.scheduler is None:
@@ -253,18 +171,18 @@ class fbRssAdMonitor:
                 self.check_for_new_ads,
                 'interval',
                 id=job_id,
-                minutes=self.refresh_interval_minutes,
+                minutes=self.refresh_interval,
                 misfire_grace_time=60,
                 coalesce=True,
                 next_run_time=datetime.now(self.local_tz) + timedelta(seconds=5) # Start soon
             )
             if not self.scheduler.running:
                 self.scheduler.start()
-            self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval_minutes} minutes.")
+            self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval} minutes.")
 
         except ConflictingIdError:
             self.logger.warning(f"Job '{job_id}' conflict. Attempting to reschedule.")
-            self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
+            self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval)
             if not self.scheduler.running:
                 self.scheduler.start(paused=False)
             self.logger.info(f"Scheduler resumed/rescheduled job '{job_id}'.")
@@ -296,13 +214,6 @@ class fbRssAdMonitor:
             with open(json_file, 'r', encoding='utf-8') as file:
                 data = json.load(file)
 
-            self.server_ip = data.get('server_ip', self.server_ip)
-            self.server_port = data.get('server_port', self.server_port)
-            self.currency = data.get('currency', self.currency)
-            self.refresh_interval_minutes = data.get('refresh_interval_minutes', self.refresh_interval_minutes)
-            self.log_filename = data.get('log_filename', self.log_filename)
-            self.database = data.get('database_name', self.database)
-
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
                  raise ValueError("'url_filters' must be a dictionary in the config file.")
@@ -315,9 +226,6 @@ class fbRssAdMonitor:
 
             self.logger.info("Configuration loaded successfully.")
             self.logger.debug(f"Monitoring URLs: {self.urls_to_monitor}")
-            self.logger.debug(f"Refresh interval: {self.refresh_interval_minutes} minutes")
-            self.logger.debug(f"Log file: {self.log_filename}")
-            self.logger.debug(f"Database: {self.database}")
 
 
         except FileNotFoundError:
@@ -400,20 +308,9 @@ class fbRssAdMonitor:
             return False
 
 
-    def save_html(self, soup: BeautifulSoup, filename: str = 'output.html') -> None:
-        """Saves the prettified HTML content of a BeautifulSoup object to a file."""
-        try:
-            html_content = soup.prettify()
-            with open(filename, 'w', encoding='utf-8') as file:
-                file.write(html_content)
-            self.logger.debug(f"HTML content saved to {filename}")
-        except Exception as e:
-            self.logger.error(f"Error saving HTML to {filename}: {e}")
-
-
-    def get_page_content(self, url: str, max_retries: int = 2) -> Optional[str]:
+    def get_page_content(self, url: str) -> list[dict]:
         """
-        Fetches the page content using Selenium with retry mechanism.
+        Fetches the page content using Playwright with retry mechanism.
 
         Args:
             url (str): The URL of the page to fetch.
@@ -422,67 +319,148 @@ class fbRssAdMonitor:
         Returns:
             Optional[str]: The HTML content of the page, or None if an error occurred.
         """
-        if not self.driver:
-             self.logger.error("Selenium driver not initialized. Cannot fetch page content.")
-             return None
-        
-        for attempt in range(max_retries + 1):
+
+        listings = []
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = context.new_page()
+
+        self.logger.info(f"Requesting URL: {url}")
+        page.goto(url, wait_until='networkidle')
+        page.wait_for_timeout(5000)
+
+        page.keyboard.press('Escape')
+
+        # Scroll down to load more listings
+        self.logger.info("Scrolling to load all listings...")
+        max_scrolls = 50
+        previous_count = 0
+        no_change_count = 0
+        max_no_change = 5  # Stop after 5 scrolls with no new listings
+        scroll_count = 0
+
+        listing_links = page.locator('a[href*="/marketplace/item/"]')
+        listing_links.first.wait_for(timeout=10000)
+
+        while no_change_count < max_no_change and scroll_count < max_scrolls:
+            current_count = listing_links.count()
+
+            if current_count > previous_count:
+                new_items = current_count - previous_count
+                self.logger.info(f"Scroll {scroll_count + 1}: Found {current_count} listings (+{new_items} new)")
+                previous_count = current_count
+                no_change_count = 0
+            else:
+                no_change_count += 1
+                self.logger.info(f"Scroll {scroll_count + 1}: No new listings ({no_change_count}/{max_no_change})")
+
+            page.keyboard.press('PageDown')
+            page.keyboard.press('PageDown')
+            page.keyboard.press('PageDown')
+            page.wait_for_timeout(5000)
+            time.sleep(5)
+            scroll_count += 1
+
+        # Final count
+        listing_links = page.locator('a[href*="/marketplace/item/"]')
+        count = listing_links.count()
+        self.logger.info(f"\nTotal listings found after scrolling: {count}")
+        self.logger.info("Extracting listing details...\n")
+
+        listings = self._extract_listing_data(page, listing_links, count)
+
+        context.close()
+
+        return listings
+
+
+    def _extract_listing_data(self, page, listing_links, count: int) -> List[Dict]:
+        """
+        Helper function to extract data from listing elements
+
+        Args:
+            page: Playwright page object
+            listing_links: Locator for listing links
+            count: Number of listings
+
+        Returns:
+            List of listing dictionaries
+        """
+        listings = []
+
+        for i in range(count):
             try:
-                self.logger.info(f"Requesting URL: {url} (attempt {attempt + 1}/{max_retries + 1})")
-                self.driver.get(url)
+                listing = listing_links.nth(i)
 
-                try:
+                # Extract the URL
+                href = listing.get_attribute('href')
 
-                    WebDriverWait(self.driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, AD_DIV_SELECTOR))
-                    )
-                except TimeoutException:
+                # Extract price
+                price_elem = listing.locator('span:has-text("$")').first
+                price = price_elem.inner_text() if price_elem.count() > 0 else "N/A"
 
-                    try:
-                        WebDriverWait(self.driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='main'], div[data-pagelet='MarketplacePDP'], main"))
-                        )
-                        self.logger.warning(f"Using fallback selector for {url} - AD_DIV_SELECTOR may be outdated")
-                    except TimeoutException:
+                # Extract title - look for the longer text that's not the price or location
+                # It's in a span with specific classes that shows 2 lines
+                title_elem = listing.locator('span[style*="-webkit-line-clamp: 2"]')
+                title = title_elem.inner_text() if title_elem.count() > 0 else None
 
-                        WebDriverWait(self.driver, 5).until(
-                            EC.presence_of_element_located((By.TAG_NAME, "body"))
-                        )
-                        self.logger.warning(f"Using body tag fallback for {url} - page structure may have changed")
+                # If title not found, try to get it from image alt text
+                if not title or title == "N/A":
+                    img = listing.locator('img').first
+                    if img.count() > 0:
+                        image_alt = img.get_attribute('alt')
+                        if image_alt:
+                            # Extract title from alt text (format: "Title in Location")
+                            title = image_alt.split(' in ')[0] if ' in ' in image_alt else image_alt
 
-                WebDriverWait(self.driver, 5).until(
-                    lambda driver: driver.execute_script("return document.readyState") == "complete"
-                )
-                
-                self.logger.debug(f"Page content loaded successfully for {url}")
-                return self.driver.page_source
-                
-            except WebDriverException as e:
-                if attempt == max_retries:
-                    self.logger.error(f"Selenium error fetching page content for {url} after {max_retries + 1} attempts: {e}")
+                title = title if title else "N/A"
 
-                    try:
-                        page_source = self.driver.page_source if self.driver else "No driver available"
-                        error_filename = f"error_page_{int(time.time())}.html"
-                        with open(error_filename, "w", encoding="utf-8") as f:
-                            f.write(f"<!-- Error: {e} -->\n")
-                            f.write(f"<!-- URL: {url} -->\n")
-                            f.write(page_source)
-                        self.logger.info(f"Saved error page source to {error_filename}")
-                    except Exception as save_err:
-                         self.logger.error(f"Could not save page source on error: {save_err}")
-                    return None
-                else:
-                    self.logger.warning(f"Selenium error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)
-                    
-            except Exception as e:
-                if attempt == max_retries:
-                    self.logger.exception(f"Unexpected error fetching page content for {url} after {max_retries + 1} attempts: {e}")
-                    return None
-                else:
-                    self.logger.warning(f"Unexpected error on attempt {attempt + 1} for {url}: {e}. Retrying...")
-                    time.sleep(2)
+                # Extract location - usually has comma in it and comes after title
+                location_elems = listing.locator('span:has-text(",")').all()
+                location = "N/A"
+                for loc_elem in location_elems:
+                    text = loc_elem.inner_text()
+                    # Skip if it's the price or doesn't look like a location
+                    if '$' not in text and len(text) < 50:
+                        location = text
+                        break
+
+                # Extract image URL
+                img = listing.locator('img').first
+                image_url = img.get_attribute('src') if img.count() > 0 else "N/A"
+                image_alt = img.get_attribute('alt') if img.count() > 0 else "N/A"
+
+                # Extract listing ID from the URL
+                listing_id = "N/A"
+                if href and '/marketplace/item/' in href:
+                    parts = href.split('/marketplace/item/')
+                    if len(parts) > 1:
+                        listing_id = parts[1].split('/')[0].split('?')[0]
+
+                listing_data = {
+                    'id': listing_id,
+                    'title': title.strip(),
+                    'price': price.strip(),
+                    'location': location.strip(),
+                    'url': f"https://www.facebook.com{href}" if href and not href.startswith(
+                        'http') else href if href else "N/A",
+                    'image_url': image_url,
+                    'image_alt': image_alt
+                }
+
+                listings.append(listing_data)
+
+                # Print progress every 10 items
+                if (i + 1) % 10 == 0 or i == 0:
+                    self.logger.info(f"Extracted {i + 1}/{count}: {listing_data['title'][:50]}... - {listing_data['price']}")
+
+            except Exception as ex:
+                self.logger.info(f"Error extracting listing {i}: {str(ex)}")
+                continue
+
+        return listings
 
 
     def get_ads_hash(self, content: str) -> str:
@@ -498,7 +476,7 @@ class fbRssAdMonitor:
         return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
-    def extract_ad_details(self, content: str, source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
+    def extract_ad_details(self, listings: list[dict], source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
         """
         Extracts ad details from the page HTML content and applies URL-specific filters.
 
@@ -513,67 +491,20 @@ class fbRssAdMonitor:
         """
         ads_found: List[Tuple[str, str, str, str, str, str]] = []
         try:
-            soup = BeautifulSoup(content, 'html.parser')
-
-            ad_links = soup.select(AD_LINK_TAG)
-            self.logger.debug(f"Found {len(ad_links)} potential ad links on {source_url}.")
-
             processed_urls = set()
 
-            for ad_link in ad_links:
-                href = ad_link.get('href', '')
+            for listing in listings:
 
-                full_url = f"{FACEBOOK_BASE_URL}{href.split('?')[0]}"
+                full_url = f"{FACEBOOK_BASE_URL}{listing.get('url').split('?')[0]}"
 
                 if full_url in processed_urls:
                      continue
                 processed_urls.add(full_url)
 
+                ad_id_hash = self.get_ads_hash(full_url)
 
-                title = None
-                price = None
-                location = None
-                image_url = None
-
-                spans = ad_link.select('span')
-
-                for span in spans:
-                    span_text = span.get_text(strip=True)
-
-                    if AD_TITLE_SELECTOR_STYLE in span.attrs.get('style', ''):
-                        title = span_text
-                    elif span.attrs.get('dir', '') == AD_PRICE_SELECTOR_DIR :
-                        if span_text.startswith(self.currency) or 'free' in span_text.lower():
-                            price = span_text
-                    elif re.match(r"^[A-Za-z .'-]+,\s?[A-Z]{2}$", span.get_text(strip=True)):
-                        location = span.get_text(strip=True)
-                    else:
-                        pass
-
-                image_el = ad_link.find('img')
-                if image_el:
-                    image_url = image_el.get('src')
-
-                if not title or not price:
-                    all_spans = ad_link.find_all('span')
-                    for span in all_spans:
-                        span_text = span.get_text(strip=True)
-                        if span_text and len(span_text) > 10 and not title:
-                            title = span_text
-                        elif span_text and (span_text.startswith(self.currency) or 'free' in span_text.lower()) and not price:
-                            price = span_text
-
-                if not title:
-                    link_text = ad_link.get_text(strip=True)
-                    if link_text and len(link_text) > 10:
-                        title = link_text
-                
-                if title and price:
-                    if price.startswith(self.currency) or 'free' in price.lower():
-                        ad_id_hash = self.get_ads_hash(full_url)
-
-                        if self.apply_filters(source_url, title):
-                            ads_found.append((ad_id_hash, title, price, location, image_url, full_url))
+                if self.apply_filters(source_url, listing.get('title')):
+                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url'), full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
@@ -632,28 +563,29 @@ class fbRssAdMonitor:
                 processed_urls_count += 1
                 self.logger.info(f"Processing URL ({processed_urls_count}/{len(self.urls_to_monitor)}): {url}")
                 try:
-                    self.init_selenium()
-                    if not self.driver:
-                         self.logger.warning(f"Skipping URL {url} due to Selenium initialization failure.")
-                         continue
+                    with sync_playwright() as p:
+                        self.browser = p.chromium.launch(headless=True)
+                        if not self.browser:
+                            self.logger.warning(f"Skipping URL {url} due to Playwright initialization failure.")
+                            continue
 
-                    content = self.get_page_content(url)
-                    self.quit_selenium()
+                        listings = self.get_page_content(url)
 
-                    if content is None:
+                        self.browser.close()
+
+                    if listings is None:
                         self.logger.warning(f"No content received for URL: {url}. Skipping.")
                         continue
 
-                    ads = self.extract_ad_details(content, url)
+                    ads = self.extract_ad_details(listings, url)
                     if not ads:
-                         self.logger.info(f"No matching ads found or extracted for URL: {url}.")
-                         continue
-
+                        self.logger.info(f"No matching ads found or extracted for URL: {url}.")
+                        continue
 
                     for ad_id, title, price, location, img_url, ad_url in ads:
                         if ad_id in added_ad_ids_this_run:
-                             self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
-                             continue
+                            self.logger.debug(f"Ad '{title}' ({ad_id}) already processed in this run. Skipping.")
+                            continue
 
                         cursor.execute('SELECT ad_id FROM ad_changes WHERE ad_id = ?', (ad_id,))
                         existing_ad = cursor.fetchone()
@@ -664,11 +596,13 @@ class fbRssAdMonitor:
                             self.logger.info(f"New ad detected: '{title}' ({price}) - {ad_url}")
                             description = f"""
                             Title: {title}
+                            <br>
                             Price: {price}
+                            <br>
                             Location: {location}
                             """
                             new_item = PyRSS2Gen.RSSItem(
-                                title=f"{title} - {price} - {location}",
+                                title=f"{title} | {price} | {location}",
                                 link=ad_url,
                                 description=description,
                                 enclosure=PyRSS2Gen.Enclosure(img_url, 0, "image/jpeg"),
@@ -686,28 +620,28 @@ class fbRssAdMonitor:
                                 new_ads_added_count += 1
                                 self.logger.debug(f"Successfully added new ad '{title}' to DB and RSS feed.")
                             except sqlite3.IntegrityError:
-                                self.logger.warning(f"IntegrityError inserting ad '{title}' ({ad_id}). Might be a race condition. Updating last_checked.")
+                                self.logger.warning(
+                                    f"IntegrityError inserting ad '{title}' ({ad_id}). Might be a race condition. Updating last_checked.")
                                 cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
                                                (now_iso, ad_id))
                                 conn.commit()
                             except sqlite3.Error as db_err:
-                                 self.logger.error(f"Database error processing ad '{title}' ({ad_id}): {db_err}")
-                                 conn.rollback()
+                                self.logger.error(f"Database error processing ad '{title}' ({ad_id}): {db_err}")
+                                conn.rollback()
 
                         else:
-                             self.logger.debug(f"Existing ad found: '{title}' ({ad_id}). Updating last_checked.")
-                             cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
-                                            (now_iso, ad_id))
-                             conn.commit()
+                            self.logger.debug(f"Existing ad found: '{title}' ({ad_id}). Updating last_checked.")
+                            cursor.execute('UPDATE ad_changes SET last_checked = ? WHERE ad_id = ?',
+                                           (now_iso, ad_id))
+                            conn.commit()
 
 
                 except Exception as url_proc_err:
                      self.logger.exception(f"Error processing URL {url}: {url_proc_err}")
-                     self.quit_selenium()
                 finally:
                      time.sleep(2)
 
-            self.prune_old_ads(conn, os.getenv(STALE_AD_AGE_ENV_VAR, DEFAULT_STALE_AD_AGE))
+            self.prune_old_ads(conn, self.stale_ad_age)
 
             self.logger.info(f"Finished ad check. Added {new_ads_added_count} new ads.")
 
@@ -718,7 +652,6 @@ class fbRssAdMonitor:
         except Exception as e:
             self.logger.exception(f"Unexpected error during ad check: {e}")
         finally:
-            self.quit_selenium()
             if conn:
                 conn.close()
                 self.logger.debug("Database connection closed.")
@@ -778,12 +711,14 @@ class fbRssAdMonitor:
 
                     description = f"""
                     Title: {change['title']}
+                    <br>
                     Price: {change['price']}
+                    <br>
                     Location: {change['location']}
                     """
 
                     new_item = PyRSS2Gen.RSSItem(
-                        title=f"{change['title']} - {change['price']} - {change['location']}",
+                        title=f"{change['title']} | {change['price']} | {change['location']}",
                         link=change['url'],
                         description=description,
                         enclosure=PyRSS2Gen.Enclosure(change['img_url'], 0, "image/jpeg"),
@@ -826,6 +761,7 @@ class fbRssAdMonitor:
              self.logger.exception(f"Error converting RSS feed to XML: {e}")
              return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
 
+
     def _setup_routes(self) -> None:
         """Sets up Flask routes."""
         self.app.add_url_rule('/rss', 'rss', self.rss)
@@ -833,6 +769,7 @@ class fbRssAdMonitor:
         self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
         self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
         self.app.add_url_rule('/api/img-proxy', 'img-proxy', self.img_proxy, methods=['GET'])
+
 
     def img_proxy(self):
         try:
@@ -880,10 +817,6 @@ class fbRssAdMonitor:
     def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Validates the structure and types of the configuration data."""
         required_keys = {
-            "server_ip": str,
-            "server_port": int,
-            "currency": str,
-            "refresh_interval_minutes": int,
             "url_filters": dict
         }
         for key, expected_type in required_keys.items():
@@ -891,11 +824,6 @@ class fbRssAdMonitor:
                 return False, f"Missing required key: {key}"
             if not isinstance(data[key], expected_type):
                 return False, f"Invalid type for {key}. Expected {expected_type.__name__}, got {type(data[key]).__name__}"
-
-        if not (0 < data["server_port"] < 65536):
-            return False, "Server port must be between 1 and 65535."
-        if data["refresh_interval_minutes"] <= 0:
-            return False, "Refresh interval must be a positive integer."
 
         for url, filters in data["url_filters"].items():
             try:
@@ -934,11 +862,6 @@ class fbRssAdMonitor:
         applied_dynamically = []
         requires_restart = []
 
-        new_currency = new_config.get("currency", self.currency)
-        if self.currency != new_currency:
-            self.currency = new_currency
-            applied_dynamically.append("Currency")
-
         new_url_filters = new_config.get("url_filters", self.url_filters)
         if self.url_filters != new_url_filters:
             self.url_filters = new_url_filters
@@ -946,40 +869,6 @@ class fbRssAdMonitor:
             applied_dynamically.append("URL filters")
             if not self.urls_to_monitor:
                 self.logger.warning("No URLs to monitor after config update. Monitoring will be inactive.")
-
-        new_interval = new_config.get("refresh_interval_minutes", self.refresh_interval_minutes)
-        if self.refresh_interval_minutes != new_interval:
-            old_interval = self.refresh_interval_minutes
-            self.refresh_interval_minutes = new_interval
-            if self.scheduler and self.scheduler.running:
-                try:
-                    job_id = 'check_ads_job'
-                    self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
-                    self.logger.info(f"Rescheduled ad check job from {old_interval} to {self.refresh_interval_minutes} minutes.")
-                    applied_dynamically.append("Refresh interval")
-                except Exception as e:
-                    self.logger.error(f"Failed to reschedule job for new interval {self.refresh_interval_minutes}: {e}")
-                    self.refresh_interval_minutes = old_interval
-                    return False, f"Failed to apply new refresh interval ({new_interval} min): Scheduler error. Interval reverted to {old_interval} min."
-            else:
-                self.setup_scheduler()
-                applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
-
-        new_server_ip = new_config.get("server_ip", self.server_ip)
-        new_server_port = new_config.get("server_port", self.server_port)
-        if self.server_ip != new_server_ip or self.server_port != new_server_port:
-            self.server_ip = new_server_ip
-            self.server_port = new_server_port
-            self.rss_feed.link = f"http://{self.server_ip}:{self.server_port}/rss"
-            requires_restart.append("Server IP/Port")
-
-        new_log_filename = new_config.get("log_filename", self.log_filename)
-        if self.log_filename != new_log_filename:
-            requires_restart.append("Log filename")
-
-        new_database_name = new_config.get("database_name", self.database)
-        if self.database != new_database_name:
-            requires_restart.append("Database name")
 
         message_parts = []
         if applied_dynamically:
@@ -1011,12 +900,6 @@ class fbRssAdMonitor:
 
             backup_path = self.config_file_path + ".bak"
             current_config_in_memory = {
-                "server_ip": self.server_ip,
-                "server_port": self.server_port,
-                "currency": self.currency,
-                "refresh_interval_minutes": self.refresh_interval_minutes,
-                "log_filename": self.log_filename,
-                "database_name": self.database,
                 "url_filters": self.url_filters.copy()
             }
 
@@ -1080,30 +963,22 @@ class fbRssAdMonitor:
         Args:
             debug_opt (bool): Run Flask in debug mode. Defaults to False.
         """
-        self.logger.info(f"Starting Flask server on {self.server_ip}:{self.server_port}...")
+        self.logger.info(f"Starting Flask server...")
         self.setup_scheduler()
 
         try:
             if debug_opt:
                  self.logger.warning("Running Flask in DEBUG mode.")
-                 self.app.run(host=self.server_ip, port=self.server_port, debug=True, use_reloader=False)
-            else:
-                 try:
-                     from waitress import serve
-                     self.logger.info("Running Flask with Waitress production server.")
-                     serve(self.app, host=self.server_ip, port=self.server_port, threads=4)
-                 except ImportError:
-                     self.logger.warning("Waitress not found. Falling back to Flask development server.")
-                     self.logger.warning("Install waitress for a production-ready server: pip install waitress")
-                     self.app.run(host=self.server_ip, port=self.server_port, debug=False, use_reloader=False)
+
+            self.app.run(host=self.server_ip, debug=debug_opt, use_reloader=False)
 
 
         except KeyboardInterrupt:
             self.logger.info("KeyboardInterrupt received. Shutting down...")
         except SystemExit:
             self.logger.info("SystemExit received. Shutting down...")
-        except Exception as e:
-             self.logger.exception(f"Error running the application: {e}")
+        except Exception as ex:
+             self.logger.exception(f"Error running the application: {ex}")
         finally:
             self.shutdown()
 
@@ -1165,16 +1040,9 @@ if __name__ == "__main__":
     init_logger.addHandler(init_handler)
     init_logger.setLevel(logging.INFO)
 
-    config_file = os.getenv(CONFIG_FILE_ENV_VAR, DEFAULT_CONFIG_FILE)
-    init_logger.info(f"Using configuration file: {config_file}")
-
-    if not os.path.exists(config_file):
-        init_logger.error(f"Error: Config file '{config_file}' not found!")
-        exit(1)
-
     monitor_instance = None
     try:
-        monitor_instance = fbRssAdMonitor(json_file=config_file)
+        monitor_instance = fbRssAdMonitor()
         initialize_database(monitor_instance.database, monitor_instance.logger)
         monitor_instance.run(debug_opt=False)
 

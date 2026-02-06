@@ -1,4 +1,5 @@
+.env
 .idea
 .wdm
-fb-rss-feed.db
+*.db
 *.log

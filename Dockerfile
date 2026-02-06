@@ -2,6 +2,9 @@ FROM ghcr.io/astral-sh/uv:debian
 
 WORKDIR /app
 
+ENV CONFIG_FILE="./config/config.json" \
+    SAMPLE_CONFIG_FILE="config.sample.json"
+
 RUN mkdir -m 700 ~/.gnupg && \
     install -d -m 0755 /etc/apt/keyrings && \
     wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null && \
@@ -10,16 +13,13 @@ RUN mkdir -m 700 ~/.gnupg && \
     echo 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' | tee /etc/apt/preferences.d/mozilla && \
     apt-get update && \
     apt-get install -y firefox && \
-    rm -rf /var/lib/apt/lists/* && \
-    useradd -m -s /bin/bash -u 501 appuser && \
-    chown appuser:appuser .
+    rm -rf /var/lib/apt/lists/*
 
-COPY --chown=appuser:appuser . .
+COPY . .
 
-USER appuser
-
-RUN uv sync
+RUN uv sync && \
+    playwright install --with-deps --only-shell
 
 EXPOSE 5000
 
-CMD ["uv", "run", "fb_ad_monitor.py"]
+ENTRYPOINT ["./entrypoint.sh"]

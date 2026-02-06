@@ -1,6 +1,9 @@
 .dockerignore
-Dockerfile
-*.log*
+.env
 .git
-fb-rss-feed.db
+.idea
+.wdm
+*.db
+*.log
+Dockerfile
 docker-compose.yml
