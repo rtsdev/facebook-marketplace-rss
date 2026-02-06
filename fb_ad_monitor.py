@@ -36,7 +36,6 @@ AD_LINK_TAG = "a[href*='/marketplace/item']"
 AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
 AD_PRICE_SELECTOR_DIR = 'auto'
 SELENIUM_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
-FACEBOOK_BASE_URL = "https://facebook.com"
 
 
 class fbRssAdMonitor:
@@ -495,7 +494,7 @@ class fbRssAdMonitor:
 
             for listing in listings:
 
-                full_url = f"{FACEBOOK_BASE_URL}{listing.get('url').split('?')[0]}"
+                full_url = listing.get('url').split('?')[0]
 
                 if full_url in processed_urls:
                      continue
@@ -504,7 +503,7 @@ class fbRssAdMonitor:
                 ad_id_hash = self.get_ads_hash(full_url)
 
                 if self.apply_filters(source_url, listing.get('title')):
-                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url'), full_url))
+                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url').split('?')[0], full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
