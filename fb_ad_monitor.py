@@ -36,7 +36,6 @@ AD_LINK_TAG = "a[href*='/marketplace/item']"
 AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
 AD_PRICE_SELECTOR_DIR = 'auto'
 SELENIUM_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
-FACEBOOK_BASE_URL = "https://facebook.com"
 
 
 class fbRssAdMonitor:
@@ -495,7 +494,7 @@ class fbRssAdMonitor:
 
             for listing in listings:
 
-                full_url = f"{FACEBOOK_BASE_URL}{listing.get('url').split('?')[0]}"
+                full_url = listing.get('url').split('?')[0]
 
                 if full_url in processed_urls:
                      continue
