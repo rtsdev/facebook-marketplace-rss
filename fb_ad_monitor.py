@@ -543,6 +543,12 @@ class fbRssAdMonitor:
             for url in self.urls_to_monitor:
                 processed_urls_count += 1
                 self.logger.info(f"Processing URL ({processed_urls_count}/{len(self.urls_to_monitor)}): {url}")
+
+                filters = self.url_filters.get(url)
+                if not filters.get('enabled', True):
+                    self.logger.debug(f"URL {url} is not enabled. Skipping...")
+                    continue
+
                 try:
                     with sync_playwright() as p:
                         self.browser = p.chromium.launch(headless=True)
