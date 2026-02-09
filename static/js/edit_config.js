@@ -113,17 +113,26 @@ document.addEventListener('DOMContentLoaded', () => {
         levelDiv.dataset.levelIndex = actualLevelIndex; // Store the intended level number
 
         const levelLabel = document.createElement('label');
-        levelLabel.textContent = actualLevelIndex === 0 ? 'Exclude Keywords' : `Level ${actualLevelIndex} Keywords:`;
+        switch (actualLevelIndex) {
+            case 0: {
+                levelLabel.textContent = 'Exclude Keywords';
+                break;
+            }
+            default: {
+                levelLabel.textContent = `Level ${actualLevelIndex} Keywords:`;
+            }
+        }
         levelDiv.appendChild(levelLabel);
 
         const keywordsContainer = document.createElement('div');
         keywordsContainer.className = 'keywords-container';
         levelDiv.appendChild(keywordsContainer);
 
-        if (keywords.length === 0) { // Add one empty keyword input if new level
+        if (Array.isArray(keywords)) {
+            if (keywords.length === 0) { // Add one empty keyword input if new level
             keywords.push('');
-        }
-        keywords.forEach((keyword, keywordIndex) => {
+            }
+            keywords.forEach((keyword, keywordIndex) => {
             const keywordWrapper = document.createElement('div');
             keywordWrapper.className = 'keyword-wrapper';
             const keywordInput = createKeywordInput(keyword, actualLevelIndex, filterIndex, keywordIndex);
@@ -135,10 +144,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }));
             }
             keywordsContainer.appendChild(keywordWrapper);
-        });
+            });
+        }
 
+        let buttonText;
+        switch (actualLevelIndex) {
+            case 0: {
+                buttonText = "Add Exclude Keyword";
+                break;
+            }
+            default: {
+                buttonText = `Add Keyword to Level ${actualLevelIndex}`
+            }
+        }
 
-        const buttonText = actualLevelIndex === 0 ? 'Add Exclude Keyword' : `Add Keyword to Level ${actualLevelIndex}`;
         levelDiv.appendChild(createAddButton(buttonText, () => {
             const keywordWrapper = document.createElement('div');
             keywordWrapper.className = 'keyword-wrapper';
@@ -283,7 +302,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const levelBlocks = block.querySelectorAll('.filter-level-block');
             levelBlocks.forEach((levelBlock) => {
                 const levelIndex = levelBlock.dataset.levelIndex; // Use the stored level index
-                const levelName = levelIndex === '0' ? 'exclude' : `level${levelIndex}`;
+                let levelName;
+                switch(levelIndex) {
+                    case '1': {
+                        levelName = 'exclude'
+                        break;
+                    }
+                    default:
+                        levelName = `level${levelIndex}`
+                }
                 formData.url_filters[url][levelName] = [];
                 const keywordInputs = levelBlock.querySelectorAll('.keyword-input');
                 let levelHasKeywords = false;
