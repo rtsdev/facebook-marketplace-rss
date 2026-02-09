@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -20,7 +19,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from dateutil import parser
 from flask import Flask, Response, jsonify, request, render_template, make_response, abort
 from playwright.sync_api import sync_playwright, Browser
-
 
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
 DEFAULT_LOG_LEVEL = 'INFO'
@@ -78,7 +76,6 @@ class fbRssAdMonitor:
             items=[]
         )
 
-
     def set_logger(self) -> None:
         """
         Sets up logging configuration with both file and console streaming.
@@ -94,18 +91,17 @@ class fbRssAdMonitor:
         try:
             log_level = logging.getLevelName(log_level_str)
             if not isinstance(log_level, int):
-                 logging.basicConfig(level=logging.WARNING)
-                 logging.warning(f"Invalid LOG_LEVEL '{log_level_str}'. Defaulting to {DEFAULT_LOG_LEVEL}.")
-                 log_level = logging.INFO
+                logging.basicConfig(level=logging.WARNING)
+                logging.warning(f"Invalid LOG_LEVEL '{log_level_str}'. Defaulting to {DEFAULT_LOG_LEVEL}.")
+                log_level = logging.INFO
         except ValueError:
             logging.basicConfig(level=logging.WARNING)
             logging.warning(f"Invalid LOG_LEVEL '{log_level_str}'. Defaulting to {DEFAULT_LOG_LEVEL}.")
             log_level = logging.INFO
 
-
         try:
             file_handler = RotatingFileHandler(
-                self.log_filename, mode='a', maxBytes=10*1024*1024,
+                self.log_filename, mode='a', maxBytes=10 * 1024 * 1024,
                 backupCount=2, encoding='utf-8', delay=False
             )
             file_handler.setFormatter(log_formatter)
@@ -113,7 +109,8 @@ class fbRssAdMonitor:
             self.logger.addHandler(file_handler)
         except Exception as e:
             logging.basicConfig(level=logging.ERROR)
-            logging.error(f"Failed to set up file logging handler for {self.log_filename}: {e}. Logging to console only.")
+            logging.error(
+                f"Failed to set up file logging handler for {self.log_filename}: {e}. Logging to console only.")
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(log_formatter)
@@ -123,14 +120,12 @@ class fbRssAdMonitor:
         self.logger.addHandler(console_handler)
         self.logger.info(f"Logger initialized with level {logging.getLevelName(log_level)}")
 
-
     def init_playwright(self) -> None:
         """
         Initializes Playwright Browser.
         """
         with sync_playwright() as p:
             self.browser = p.chromium.launch(headless=True)
-
 
     def close_browser(self) -> None:
         """Safely quits the Playwright browser if it exists."""
@@ -144,14 +139,13 @@ class fbRssAdMonitor:
             finally:
                 self.browser = None
 
-
     def setup_scheduler(self) -> None:
         """
         Sets up the background job scheduler to check for new ads.
         """
         if self.scheduler and self.scheduler.running:
-             self.logger.warning("Scheduler is already running.")
-             return
+            self.logger.warning("Scheduler is already running.")
+            return
 
         self.logger.info(f"Setting up scheduler to run every {self.refresh_interval} minutes.")
         job_id = 'check_ads_job'
@@ -173,7 +167,7 @@ class fbRssAdMonitor:
                 minutes=self.refresh_interval,
                 misfire_grace_time=60,
                 coalesce=True,
-                next_run_time=datetime.now(self.local_tz) + timedelta(seconds=5) # Start soon
+                next_run_time=datetime.now(self.local_tz) + timedelta(seconds=5)  # Start soon
             )
             if not self.scheduler.running:
                 self.scheduler.start()
@@ -185,16 +179,14 @@ class fbRssAdMonitor:
             if not self.scheduler.running:
                 self.scheduler.start(paused=False)
             self.logger.info(f"Scheduler resumed/rescheduled job '{job_id}'.")
-        except Exception as e:
-             self.logger.error(f"Failed to setup or start scheduler: {e}")
-
+        except Exception as ex:
+            self.logger.error(f"Failed to setup or start scheduler: {ex}")
 
     def local_time(self, dt: datetime) -> datetime:
         """Converts a UTC datetime object to local time."""
         if dt.tzinfo is None:
-             dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(self.local_tz)
-
 
     def load_from_json(self, json_file: str) -> None:
         """
@@ -215,13 +207,13 @@ class fbRssAdMonitor:
 
             url_filters_raw = data.get('url_filters', {})
             if not isinstance(url_filters_raw, dict):
-                 raise ValueError("'url_filters' must be a dictionary in the config file.")
+                raise ValueError("'url_filters' must be a dictionary in the config file.")
 
             self.url_filters = url_filters_raw
             self.urls_to_monitor = list(self.url_filters.keys())
 
             if not self.urls_to_monitor:
-                 self.logger.warning("No URLs found in 'url_filters'. Monitoring will be inactive.")
+                self.logger.warning("No URLs found in 'url_filters'. Monitoring will be inactive.")
 
             self.logger.info("Configuration loaded successfully.")
             self.logger.debug(f"Monitoring URLs: {self.urls_to_monitor}")
@@ -230,19 +222,18 @@ class fbRssAdMonitor:
         except FileNotFoundError:
             self.logger.error(f"Configuration file not found: {json_file}")
             raise
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Error decoding JSON from {json_file}: {e}")
-            raise ValueError(f"Invalid JSON format in {json_file}") from e
-        except KeyError as e:
-             self.logger.error(f"Missing required key in configuration file {json_file}: {e}")
-             raise ValueError(f"Missing key '{e}' in {json_file}") from e
-        except ValueError as e: # Catch specific validation errors
-             self.logger.error(f"Configuration error in {json_file}: {e}")
-             raise
-        except Exception as e:
-            self.logger.exception(f"Unexpected error loading configuration from {json_file}: {e}")
+        except json.JSONDecodeError as ex:
+            self.logger.error(f"Error decoding JSON from {json_file}: {ex}")
+            raise ValueError(f"Invalid JSON format in {json_file}") from ex
+        except KeyError as ex:
+            self.logger.error(f"Missing required key in configuration file {json_file}: {ex}")
+            raise ValueError(f"Missing key '{ex}' in {json_file}") from ex
+        except ValueError as ex:  # Catch specific validation errors
+            self.logger.error(f"Configuration error in {json_file}: {ex}")
             raise
-
+        except Exception as ex:
+            self.logger.exception(f"Unexpected error loading configuration from {json_file}: {ex}")
+            raise
 
     def apply_filters(self, url: str, title: str) -> bool:
         """
@@ -260,12 +251,14 @@ class fbRssAdMonitor:
         filters = self.url_filters.get(url)
 
         if not filters:
-            self.logger.debug(f"No specific keyword filters defined for URL '{url}' (filters: {filters}). Ad '{title}' passes.")
+            self.logger.debug(
+                f"No specific keyword filters defined for URL '{url}' (filters: {filters}). Ad '{title}' passes.")
             return True
 
         if not isinstance(filters, dict):
-             self.logger.warning(f"Filters for URL '{url}' are not a dictionary (type: {type(filters)}). Skipping filters.")
-             return True
+            self.logger.warning(
+                f"Filters for URL '{url}' are not a dictionary (type: {type(filters)}). Skipping filters.")
+            return True
 
         try:
 
@@ -273,7 +266,8 @@ class fbRssAdMonitor:
 
             exclude_keywords = filters.get('exclude', [])
             if any(keyword.lower() in title_lower for keyword in exclude_keywords):
-                self.logger.debug(f"Ad '{title}' for URL '{url}' contains excluded keywords. Keywords: {exclude_keywords}")
+                self.logger.debug(
+                    f"Ad '{title}' for URL '{url}' contains excluded keywords. Keywords: {exclude_keywords}")
                 return False
 
             level_keys = sorted(
@@ -282,30 +276,30 @@ class fbRssAdMonitor:
             )
 
             if not level_keys:
-                 self.logger.debug(f"No valid 'levelX' keys found in filters for URL '{url}'. Ad '{title}' passes.")
-                 return True
+                self.logger.debug(f"No valid 'levelX' keys found in filters for URL '{url}'. Ad '{title}' passes.")
+                return True
 
             for level in level_keys:
                 keywords = filters.get(level, [])
                 if not isinstance(keywords, list):
-                     self.logger.warning(f"Keywords for level '{level}' in URL '{url}' are not a list. Skipping level.")
-                     continue
+                    self.logger.warning(f"Keywords for level '{level}' in URL '{url}' are not a list. Skipping level.")
+                    continue
 
                 if not keywords:
-                     self.logger.debug(f"No keywords defined for level '{level}' in URL '{url}'. Skipping level.")
-                     continue
+                    self.logger.debug(f"No keywords defined for level '{level}' in URL '{url}'. Skipping level.")
+                    continue
 
                 if not any(keyword.lower() in title_lower for keyword in keywords):
-                    self.logger.debug(f"Ad '{title}' failed filter level '{level}' for URL '{url}'. Keywords: {keywords}")
+                    self.logger.debug(
+                        f"Ad '{title}' failed filter level '{level}' for URL '{url}'. Keywords: {keywords}")
                     return False
 
             self.logger.debug(f"Ad '{title}' passed all filter levels for URL '{url}'.")
             return True
 
-        except Exception as e:
-            self.logger.exception(f"Error applying filters for URL '{url}', title '{title}': {e}")
+        except Exception as ex:
+            self.logger.exception(f"Error applying filters for URL '{url}', title '{title}': {ex}")
             return False
-
 
     def get_page_content(self, url: str) -> list[dict]:
         """
@@ -313,7 +307,6 @@ class fbRssAdMonitor:
 
         Args:
             url (str): The URL of the page to fetch.
-            max_retries (int): Maximum number of retry attempts.
 
         Returns:
             Optional[str]: The HTML content of the page, or None if an error occurred.
@@ -332,12 +325,11 @@ class fbRssAdMonitor:
 
         page.keyboard.press('Escape')
 
-        # Scroll down to load more listings
         self.logger.info("Scrolling to load all listings...")
         max_scrolls = 50
         previous_count = 0
         no_change_count = 0
-        max_no_change = 5  # Stop after 5 scrolls with no new listings
+        max_no_change = 5
         scroll_count = 0
 
         listing_links = page.locator('a[href*="/marketplace/item/"]')
@@ -362,7 +354,6 @@ class fbRssAdMonitor:
             time.sleep(5)
             scroll_count += 1
 
-        # Final count
         listing_links = page.locator('a[href*="/marketplace/item/"]')
         count = listing_links.count()
         self.logger.info(f"\nTotal listings found after scrolling: {count}")
@@ -373,7 +364,6 @@ class fbRssAdMonitor:
         context.close()
 
         return listings
-
 
     def _extract_listing_data(self, page, listing_links, count: int) -> List[Dict]:
         """
@@ -393,45 +383,35 @@ class fbRssAdMonitor:
             try:
                 listing = listing_links.nth(i)
 
-                # Extract the URL
                 href = listing.get_attribute('href')
 
-                # Extract price
                 price_elem = listing.locator('span:has-text("$")').first
                 price = price_elem.inner_text() if price_elem.count() > 0 else "N/A"
 
-                # Extract title - look for the longer text that's not the price or location
-                # It's in a span with specific classes that shows 2 lines
                 title_elem = listing.locator('span[style*="-webkit-line-clamp: 2"]')
                 title = title_elem.inner_text() if title_elem.count() > 0 else None
 
-                # If title not found, try to get it from image alt text
                 if not title or title == "N/A":
                     img = listing.locator('img').first
                     if img.count() > 0:
                         image_alt = img.get_attribute('alt')
                         if image_alt:
-                            # Extract title from alt text (format: "Title in Location")
                             title = image_alt.split(' in ')[0] if ' in ' in image_alt else image_alt
 
                 title = title if title else "N/A"
 
-                # Extract location - usually has comma in it and comes after title
                 location_elems = listing.locator('span:has-text(",")').all()
                 location = "N/A"
                 for loc_elem in location_elems:
                     text = loc_elem.inner_text()
-                    # Skip if it's the price or doesn't look like a location
                     if '$' not in text and len(text) < 50:
                         location = text
                         break
 
-                # Extract image URL
                 img = listing.locator('img').first
                 image_url = img.get_attribute('src') if img.count() > 0 else "N/A"
                 image_alt = img.get_attribute('alt') if img.count() > 0 else "N/A"
 
-                # Extract listing ID from the URL
                 listing_id = "N/A"
                 if href and '/marketplace/item/' in href:
                     parts = href.split('/marketplace/item/')
@@ -451,16 +431,15 @@ class fbRssAdMonitor:
 
                 listings.append(listing_data)
 
-                # Print progress every 10 items
                 if (i + 1) % 10 == 0 or i == 0:
-                    self.logger.info(f"Extracted {i + 1}/{count}: {listing_data['title'][:50]}... - {listing_data['price']}")
+                    self.logger.info(
+                        f"Extracted {i + 1}/{count}: {listing_data['title'][:50]}... - {listing_data['price']}")
 
             except Exception as ex:
                 self.logger.info(f"Error extracting listing {i}: {str(ex)}")
                 continue
 
         return listings
-
 
     def get_ads_hash(self, content: str) -> str:
         """
@@ -474,13 +453,12 @@ class fbRssAdMonitor:
         """
         return hashlib.md5(content.encode('utf-8')).hexdigest()
 
-
     def extract_ad_details(self, listings: list[dict], source_url: str) -> List[Tuple[str, str, str, str, str, str]]:
         """
         Extracts ad details from the page HTML content and applies URL-specific filters.
 
         Args:
-            content (str): The HTML content of the page.
+            listings (list[dict]): The listings found from the fetched URL
             source_url (str): The original URL the content was fetched from (used for filtering).
 
         Returns:
@@ -497,21 +475,21 @@ class fbRssAdMonitor:
                 full_url = listing.get('url').split('?')[0]
 
                 if full_url in processed_urls:
-                     continue
+                    continue
                 processed_urls.add(full_url)
 
                 ad_id_hash = self.get_ads_hash(full_url)
 
                 if self.apply_filters(source_url, listing.get('title')):
-                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'), listing.get('image_url'), full_url))
+                    ads_found.append((ad_id_hash, listing.get('title'), listing.get('price'), listing.get('location'),
+                                      listing.get('image_url'), full_url))
 
             self.logger.info(f"Extracted {len(ads_found)} ads matching filters from {source_url}.")
             return ads_found
 
-        except Exception as e:
-            self.logger.exception(f"Error extracting ad details from {source_url}: {e}")
+        except Exception as ex:
+            self.logger.exception(f"Error extracting ad details from {source_url}: {ex}")
             return []
-
 
     def get_db_connection(self) -> Optional[sqlite3.Connection]:
         """
@@ -521,7 +499,7 @@ class fbRssAdMonitor:
             Optional[sqlite3.Connection]: The database connection object, or None on error.
         """
         try:
-            conn = sqlite3.connect(self.database, timeout=10) # Add timeout
+            conn = sqlite3.connect(self.database, timeout=10)
             conn.row_factory = sqlite3.Row
             # Optional: Enable WAL mode for better concurrency
             # try:
@@ -533,7 +511,6 @@ class fbRssAdMonitor:
         except sqlite3.Error as e:
             self.logger.error(f"Database connection error to {self.database}: {e}")
             return None
-
 
     def check_for_new_ads(self) -> None:
         """
@@ -636,20 +613,20 @@ class fbRssAdMonitor:
 
 
                 except Exception as url_proc_err:
-                     self.logger.exception(f"Error processing URL {url}: {url_proc_err}")
+                    self.logger.exception(f"Error processing URL {url}: {url_proc_err}")
                 finally:
-                     time.sleep(2)
+                    time.sleep(2)
 
             self.prune_old_ads(conn, self.stale_ad_age)
 
             self.logger.info(f"Finished ad check. Added {new_ads_added_count} new ads.")
 
-        except sqlite3.DatabaseError as e:
-            self.logger.error(f"Database error during ad check: {e}")
+        except sqlite3.DatabaseError as ex:
+            self.logger.error(f"Database error during ad check: {ex}")
             if conn:
-                 conn.rollback()
-        except Exception as e:
-            self.logger.exception(f"Unexpected error during ad check: {e}")
+                conn.rollback()
+        except Exception as ex:
+            self.logger.exception(f"Unexpected error during ad check: {ex}")
         finally:
             if conn:
                 conn.close()
@@ -657,12 +634,11 @@ class fbRssAdMonitor:
             self.job_lock.release()
             self.logger.debug("Ad check job lock released.")
 
-
     def prune_old_ads(self, conn: sqlite3.Connection, days_to_keep: int = DEFAULT_STALE_AD_AGE) -> None:
         """Removes ads from the database that haven't been seen for a specified number of days."""
         if not conn:
-             self.logger.warning("Cannot prune ads, database connection is not available.")
-             return
+            self.logger.warning("Cannot prune ads, database connection is not available.")
+            return
         try:
              cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
              self.logger.info(f"Pruning ads last checked before {cutoff_date.isoformat()}...")
@@ -671,15 +647,14 @@ class fbRssAdMonitor:
              deleted_count = cursor.rowcount
              conn.commit()
              self.logger.info(f"Pruned {deleted_count} old ad entries from the database.")
-        except sqlite3.Error as e:
-             self.logger.error(f"Error pruning old ads from database: {e}")
+        except sqlite3.Error as ex:
+             self.logger.error(f"Error pruning old ads from database: {ex}")
              conn.rollback()
-
 
     def generate_rss_feed_from_db(self) -> None:
         """
         Generates the RSS feed items list from recent ad changes in the database.
-        This replaces the current items in self.rss_feed.items.
+        Updates the internal rss_feed object.
         """
         self.logger.debug("Generating RSS feed items from database...")
         conn = None
@@ -725,20 +700,22 @@ class fbRssAdMonitor:
                         pubDate=pub_date_local
                     )
                     new_items.append(new_item)
-                except (ValueError, TypeError) as e:
-                    self.logger.error(f"Error processing ad change for RSS (ID: {change['ad_id']}): {e}. Skipping item.")
+                except (ValueError, TypeError) as ex:
+                    self.logger.error(
+                        f"Error processing ad change for RSS (ID: {change['ad_id']}): {ex}. Skipping item.")
                 except Exception as item_err:
-                     self.logger.exception(f"Unexpected error creating RSS item for ad (ID: {change['ad_id']}): {item_err}. Skipping item.")
+                    self.logger.exception(
+                        f"Unexpected error creating RSS item for ad (ID: {change['ad_id']}): {item_err}. Skipping item.")
 
             self.rss_feed.items = new_items
             self.rss_feed.lastBuildDate = datetime.now(timezone.utc)
             self.logger.info(f"RSS feed updated with {len(new_items)} items from database.")
 
-        except sqlite3.DatabaseError as e:
-            self.logger.error(f"Database error generating RSS feed: {e}")
+        except sqlite3.DatabaseError as ex:
+            self.logger.error(f"Database error generating RSS feed: {ex}")
             self.rss_feed.items = []
-        except Exception as e:
-            self.logger.exception(f"Unexpected error generating RSS feed: {e}")
+        except Exception as ex:
+            self.logger.exception(f"Unexpected error generating RSS feed: {ex}")
             self.rss_feed.items = []
         finally:
             if conn:
@@ -756,8 +733,8 @@ class fbRssAdMonitor:
         try:
             rss_xml = self.rss_feed.to_xml(encoding='utf-8')
             return Response(rss_xml, mimetype='application/rss+xml')
-        except Exception as e:
-             self.logger.exception(f"Error converting RSS feed to XML: {e}")
+        except Exception as ex:
+             self.logger.exception(f"Error converting RSS feed to XML: {ex}")
              return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
 
 
@@ -781,8 +758,8 @@ class fbRssAdMonitor:
             flask_response.headers['Content-Length'] = response.headers['Content-Length']
             return flask_response
 
-        except requests.RequestException as e:
-            self.logger.error(f"Error generating img proxy request: {e}")
+        except requests.RequestException as ex:
+            self.logger.error(f"Error generating img proxy request: {ex}")
             abort(404)
 
 
@@ -790,8 +767,8 @@ class fbRssAdMonitor:
         """Serves the HTML page for editing configuration."""
         try:
             return render_template('edit_config.html')
-        except Exception as e:
-            self.logger.error(f"Error rendering edit_config.html: {e}")
+        except Exception as ex:
+            self.logger.error(f"Error rendering edit_config.html: {ex}")
             return "Error loading configuration page.", 500
 
 
@@ -808,8 +785,8 @@ class fbRssAdMonitor:
             except json.JSONDecodeError:
                 self.logger.error(f"Error decoding config file {self.config_file_path} for API.")
                 return jsonify({"detail": "Error reading configuration file."}), 500
-            except Exception as e:
-                self.logger.exception(f"Unexpected error in get_config_api: {e}")
+            except Exception as ex:
+                self.logger.exception(f"Unexpected error in get_config_api: {ex}")
                 return jsonify({"detail": "Internal server error."}), 500
 
 
@@ -844,13 +821,11 @@ class fbRssAdMonitor:
                     return False, f"All keywords for '{level_name}' in URL '{url}' must be strings."
         return True, ""
 
-
     def _write_config(self, data: Dict[str, Any]) -> None:
         """Writes the given data to the configuration file."""
         with open(self.config_file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
         self.logger.info(f"Configuration successfully written to {self.config_file_path}")
-
 
     def _reload_config_dynamically(self, new_config: Dict[str, Any]) -> Tuple[bool, str]:
         """
@@ -880,7 +855,7 @@ class fbRssAdMonitor:
 
         if not message_parts:
             return True, "Configuration saved. No effective changes made or all changes require a restart and were noted."
-        
+
         final_message = "Configuration saved. " + " ".join(message_parts)
         return True, final_message.strip()
 
@@ -983,19 +958,19 @@ class fbRssAdMonitor:
 
 
     def shutdown(self) -> None:
-        """Gracefully shuts down the scheduler and Selenium driver."""
+        """Gracefully shuts down the scheduler and browser."""
         self.logger.info("Initiating shutdown sequence...")
         if self.scheduler and self.scheduler.running:
             self.logger.info("Shutting down scheduler...")
             try:
-                 self.scheduler.shutdown(wait=False)
-                 self.logger.info("Scheduler shut down.")
-            except Exception as e:
-                 self.logger.error(f"Error shutting down scheduler: {e}")
+                self.scheduler.shutdown(wait=False)
+                self.logger.info("Scheduler shut down.")
+            except Exception as ex:
+                self.logger.error(f"Error shutting down scheduler: {ex}")
         else:
-             self.logger.info("Scheduler not running or not initialized.")
+            self.logger.info("Scheduler not running or not initialized.")
 
-        self.quit_selenium()
+        self.close_browser()
         self.logger.info("Shutdown sequence complete.")
 
 
