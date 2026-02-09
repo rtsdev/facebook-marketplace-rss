@@ -17,7 +17,14 @@ import tzlocal
 from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from dateutil import parser
-from flask import Flask, Response, jsonify, request, render_template, make_response, abort
+from litestar import Litestar, Request, Response, get, post
+from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.logging import LoggingConfig
+from litestar.template.config import TemplateConfig
+from litestar.response import Template
+from litestar.static_files import create_static_files_router
+from litestar.status_codes import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR
+from litestar.datastructures import State
 from playwright.sync_api import sync_playwright, Browser
 
 LOG_LEVEL_ENV_VAR = 'LOG_LEVEL'
@@ -28,7 +35,7 @@ DEFAULT_REFRESH_INTERVAL = 15
 STALE_AD_AGE_ENV_VAR = 'STALE_AD_AGE'
 DEFAULT_STALE_AD_AGE = 14
 RSS_EXTERNAL_DOMAIN_ENV_VAR = 'RSS_EXTERNAL_DOMAIN'
-DEFAULT_RSS_EXTERNAL_DOMAIN = 'http://localhost:5000'
+DEFAULT_RSS_EXTERNAL_DOMAIN = 'http://localhost:8000'
 AD_DIV_SELECTOR = 'div.x78zum5.xdt5ytf.x1iyjqo2.xd4ddsz'
 AD_LINK_TAG = "a[href*='/marketplace/item']"
 AD_TITLE_SELECTOR_STYLE = '-webkit-line-clamp'
@@ -52,6 +59,7 @@ class fbRssAdMonitor:
         self.local_tz = tzlocal.get_localzone()
         self.log_filename: str = f"{CONFIG_DIR}/fbm-rss-feed.log"
         self.server_ip: str = "0.0.0.0"
+        self.server_port: int = 8000
         self.rss_external_domain: str = os.getenv(RSS_EXTERNAL_DOMAIN_ENV_VAR, DEFAULT_RSS_EXTERNAL_DOMAIN)
         self.currency: str = "$"
         self.refresh_interval: int = int(os.getenv(REFRESH_INTERVAL_ENV_VAR, DEFAULT_REFRESH_INTERVAL))
@@ -64,9 +72,6 @@ class fbRssAdMonitor:
         self.set_logger()
 
         self.load_from_json(self.config_file_path)
-
-        self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
-        self._setup_routes()
 
         self.rss_feed: PyRSS2Gen.RSS2 = PyRSS2Gen.RSS2(
             title="Facebook Marketplace Ad Feed",
@@ -640,41 +645,51 @@ class fbRssAdMonitor:
             self.logger.warning("Cannot prune ads, database connection is not available.")
             return
         try:
-             cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
-             self.logger.info(f"Pruning ads last checked before {cutoff_date.isoformat()}...")
-             cursor = conn.cursor()
-             cursor.execute("DELETE FROM ad_changes WHERE last_checked < ?", (cutoff_date.isoformat(),))
-             deleted_count = cursor.rowcount
-             conn.commit()
-             self.logger.info(f"Pruned {deleted_count} old ad entries from the database.")
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+            cutoff_iso = cutoff_date.isoformat()
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM ad_changes WHERE last_checked < ?', (cutoff_iso,))
+            count_to_delete = cursor.fetchone()[0]
+
+            if count_to_delete > 0:
+                self.logger.info(
+                    f"Pruning {count_to_delete} ads older than {days_to_keep} days (last_checked before {cutoff_iso}).")
+                cursor.execute('DELETE FROM ad_changes WHERE last_checked < ?', (cutoff_iso,))
+                conn.commit()
+                self.logger.info(f"Successfully pruned {count_to_delete} old ads from the database.")
+            else:
+                self.logger.debug(f"No ads older than {days_to_keep} days found. No pruning needed.")
+
         except sqlite3.Error as ex:
-             self.logger.error(f"Error pruning old ads from database: {ex}")
-             conn.rollback()
+            self.logger.error(f"Database error while pruning old ads: {ex}")
+            if conn:
+                conn.rollback()
+        except Exception as ex:
+            self.logger.exception(f"Unexpected error while pruning old ads: {ex}")
 
     def generate_rss_feed_from_db(self) -> None:
         """
         Generates the RSS feed items list from recent ad changes in the database.
         Updates the internal rss_feed object.
         """
-        self.logger.debug("Generating RSS feed items from database...")
         conn = None
-        new_items: List[PyRSS2Gen.RSSItem] = []
         try:
             conn = self.get_db_connection()
             if not conn:
-                 self.logger.error("Cannot generate RSS feed from DB: No database connection.")
-                 return
+                self.logger.error("Failed to get database connection for RSS feed generation. Feed will be empty.")
+                self.rss_feed.items = []
+                return
 
+            new_items = []
             cursor = conn.cursor()
-            relevant_period_start = datetime.now(timezone.utc) - timedelta(days=7)
+            relevant_period_start = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
             cursor.execute('''
                 SELECT ad_id, title, price, location, img_url, url, last_checked
                 FROM ad_changes
                 WHERE last_checked >= ?
                 ORDER BY last_checked DESC
-                LIMIT 100
-            ''', (relevant_period_start.isoformat(),))
+            ''', (relevant_period_start,))
             changes = cursor.fetchall()
             self.logger.debug(f"Fetched {len(changes)} ad changes from DB for RSS feed.")
 
@@ -721,74 +736,6 @@ class fbRssAdMonitor:
             if conn:
                 conn.close()
                 self.logger.debug("Database connection closed after RSS generation.")
-
-
-    def rss(self) -> Response:
-        """
-        Flask endpoint handler. Generates and returns the RSS feed XML.
-        """
-        self.logger.info("RSS feed requested. Generating fresh feed from database.")
-        self.generate_rss_feed_from_db()
-
-        try:
-            rss_xml = self.rss_feed.to_xml(encoding='utf-8')
-            return Response(rss_xml, mimetype='application/rss+xml')
-        except Exception as ex:
-             self.logger.exception(f"Error converting RSS feed to XML: {ex}")
-             return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
-
-
-    def _setup_routes(self) -> None:
-        """Sets up Flask routes."""
-        self.app.add_url_rule('/rss', 'rss', self.rss)
-        self.app.add_url_rule('/edit', 'edit_config_page', self.edit_config_page, methods=['GET'])
-        self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
-        self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
-        self.app.add_url_rule('/api/img-proxy', 'img-proxy', self.img_proxy, methods=['GET'])
-
-
-    def img_proxy(self):
-        try:
-            img_url = request.args.get("url")
-            response = requests.get(img_url, stream=True)
-            response.raise_for_status()
-
-            flask_response = make_response(response.content)
-            flask_response.headers['Content-Type'] = response.headers['Content-Type']
-            flask_response.headers['Content-Length'] = response.headers['Content-Length']
-            return flask_response
-
-        except requests.RequestException as ex:
-            self.logger.error(f"Error generating img proxy request: {ex}")
-            abort(404)
-
-
-    def edit_config_page(self) -> Any:
-        """Serves the HTML page for editing configuration."""
-        try:
-            return render_template('edit_config.html')
-        except Exception as ex:
-            self.logger.error(f"Error rendering edit_config.html: {ex}")
-            return "Error loading configuration page.", 500
-
-
-    def get_config_api(self) -> Response:
-        """API endpoint to get the current configuration."""
-        with self.config_lock:
-            try:
-                with open(self.config_file_path, 'r', encoding='utf-8') as f:
-                    current_config = json.load(f)
-                return jsonify(current_config)
-            except FileNotFoundError:
-                self.logger.error(f"Config file {self.config_file_path} not found for API.")
-                return jsonify({"detail": "Configuration file not found."}), 404
-            except json.JSONDecodeError:
-                self.logger.error(f"Error decoding config file {self.config_file_path} for API.")
-                return jsonify({"detail": "Error reading configuration file."}), 500
-            except Exception as ex:
-                self.logger.exception(f"Unexpected error in get_config_api: {ex}")
-                return jsonify({"detail": "Internal server error."}), 500
-
 
     def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Validates the structure and types of the configuration data."""
@@ -859,104 +806,6 @@ class fbRssAdMonitor:
         final_message = "Configuration saved. " + " ".join(message_parts)
         return True, final_message.strip()
 
-
-    def update_config_api(self) -> Response:
-        """API endpoint to update the configuration."""
-        with self.config_lock:
-            new_data = request.get_json()
-            if not new_data:
-                return jsonify({"detail": "No data provided or not JSON."}), 400
-
-            is_valid, validation_msg = self._validate_config_data(new_data)
-            if not is_valid:
-                self.logger.error(f"Invalid config data received: {validation_msg}")
-                return jsonify({"detail": f"Invalid configuration data: {validation_msg}"}), 400
-
-            backup_path = self.config_file_path + ".bak"
-            current_config_in_memory = {
-                "url_filters": self.url_filters.copy()
-            }
-
-            try:
-                if os.path.exists(self.config_file_path):
-                    shutil.copy2(self.config_file_path, backup_path)
-                    self.logger.info(f"Created backup of config: {backup_path}")
-
-                self.logger.info(f"DEBUG: Data to be written to config by _write_config: {json.dumps(new_data)}")
-                self._write_config(new_data)
-                try:
-                    with open(self.config_file_path, 'r', encoding='utf-8') as f_check:
-                        written_data_check = json.load(f_check)
-                    self.logger.info(f"DEBUG: Data read back from config immediately after _write_config: {json.dumps(written_data_check)}")
-                    if new_data != written_data_check:
-                        self.logger.warning("DEBUG: Data in file does NOT match data intended to be written!")
-                except Exception as read_check_err:
-                    self.logger.error(f"DEBUG: Error reading back config for check: {read_check_err}")
-
-                success, reload_msg = self._reload_config_dynamically(new_data)
-
-                if not success:
-                    raise Exception(f"Failed to apply new configuration dynamically: {reload_msg}")
-
-                if os.path.exists(backup_path):
-                    os.remove(backup_path)
-                self.logger.info("Configuration updated and applied successfully.")
-                return jsonify({"message": reload_msg}), 200
-
-            except Exception as e:
-                self.logger.exception(f"Error updating configuration: {e}. Rolling back.")
-                if os.path.exists(backup_path):
-                    try:
-                        shutil.move(backup_path, self.config_file_path)
-                        self.logger.info(f"Rolled back configuration from {backup_path}")
-                        self.load_from_json(self.config_file_path)
-                        self.setup_scheduler()
-                        self.logger.info("Re-applied previous configuration settings after rollback.")
-
-                    except Exception as rb_err:
-                        self.logger.error(f"CRITICAL: Failed to rollback configuration file: {rb_err}. Config may be inconsistent.")
-                        return jsonify({"detail": f"Error saving configuration and failed to rollback: {e}. Manual check required."}), 500
-                else:
-                    try:
-                        self._write_config(current_config_in_memory)
-                        self.logger.info("Wrote original in-memory config back after update failure.")
-                        self.load_from_json(self.config_file_path)
-                        self.setup_scheduler()
-                    except Exception as write_back_err:
-                        self.logger.error(f"CRITICAL: Failed to write original config back: {write_back_err}. Config may be corrupted.")
-                        return jsonify({"detail": f"Error saving configuration, failed to write original back: {e}. Manual check required."}), 500
-
-
-                return jsonify({"detail": f"Error saving configuration: {str(e)}. Configuration has been rolled back to previous state."}), 500
-
-
-    def run(self, debug_opt: bool = False) -> None:
-        """
-        Starts the Flask application and the background scheduler.
-
-        Args:
-            debug_opt (bool): Run Flask in debug mode. Defaults to False.
-        """
-        self.logger.info(f"Starting Flask server...")
-        self.setup_scheduler()
-
-        try:
-            if debug_opt:
-                 self.logger.warning("Running Flask in DEBUG mode.")
-
-            self.app.run(host=self.server_ip, debug=debug_opt, use_reloader=False)
-
-
-        except KeyboardInterrupt:
-            self.logger.info("KeyboardInterrupt received. Shutting down...")
-        except SystemExit:
-            self.logger.info("SystemExit received. Shutting down...")
-        except Exception as ex:
-             self.logger.exception(f"Error running the application: {ex}")
-        finally:
-            self.shutdown()
-
-
     def shutdown(self) -> None:
         """Gracefully shuts down the scheduler and browser."""
         self.logger.info("Initiating shutdown sequence...")
@@ -1006,6 +855,242 @@ def initialize_database(db_name: str, logger: logging.Logger) -> None:
             conn.close()
 
 
+@get("/rss")
+async def rss_handler(state: State) -> Response:
+    """Generates and returns the RSS feed XML."""
+    monitor: fbRssAdMonitor = state.monitor
+    monitor.logger.info("RSS feed requested. Generating fresh feed from database.")
+    monitor.generate_rss_feed_from_db()
+
+    try:
+        rss_xml = monitor.rss_feed.to_xml(encoding='utf-8')
+        return Response(
+            content=rss_xml,
+            status_code=HTTP_200_OK,
+            media_type='application/rss+xml'
+        )
+    except Exception as ex:
+        monitor.logger.exception(f"Error converting RSS feed to XML: {ex}")
+        return Response(
+            content="Error generating RSS feed.",
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            media_type='text/plain'
+        )
+
+
+@get("/edit")
+async def edit_config_page_handler(state: State) -> Template:
+    """Serves the HTML page for editing configuration."""
+    return Template(template_name="edit_config.html")
+
+
+@get("/api/config")
+async def get_config_handler(state: State) -> Response[dict[str, Any]]:
+    """API endpoint to get the current configuration."""
+    monitor: fbRssAdMonitor = state.monitor
+    with monitor.config_lock:
+        try:
+            with open(monitor.config_file_path, 'r', encoding='utf-8') as f:
+                current_config = json.load(f)
+            return Response(content=current_config, status_code=200)
+        except FileNotFoundError:
+            monitor.logger.error(f"Config file {monitor.config_file_path} not found for API.")
+            return Response(
+                content={"detail": "Configuration file not found."},
+                status_code=HTTP_404_NOT_FOUND,
+                media_type='application/json'
+            )
+        except json.JSONDecodeError:
+            monitor.logger.error(f"Error decoding config file {monitor.config_file_path} for API.")
+            return Response(
+                content={"detail": "Error reading configuration file."},
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                media_type='application/json'
+            )
+        except Exception as ex:
+            monitor.logger.exception(f"Unexpected error in get_config_api: {ex}")
+            return Response(
+                content={"detail": "Internal server error."},
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                media_type='application/json'
+            )
+
+
+@post("/api/config")
+async def update_config_handler(request: Request, state: State) -> Response[dict[str, str]]:
+    """API endpoint to update the configuration."""
+    monitor: fbRssAdMonitor = state.monitor
+    with monitor.config_lock:
+        new_data = await request.json()
+        if not new_data:
+            return Response(
+                content={"detail": "No data provided or not JSON."},
+                status_code=HTTP_400_BAD_REQUEST,
+                media_type='application/json'
+            )
+
+        is_valid, validation_msg = monitor._validate_config_data(new_data)
+        if not is_valid:
+            monitor.logger.error(f"Invalid config data received: {validation_msg}")
+            return Response(
+                content={"detail": f"Invalid configuration data: {validation_msg}"},
+                status_code=HTTP_400_BAD_REQUEST,
+                media_type='application/json'
+            )
+
+        backup_path = monitor.config_file_path + ".bak"
+        current_config_in_memory = {
+            "url_filters": monitor.url_filters.copy()
+        }
+
+        try:
+            if os.path.exists(monitor.config_file_path):
+                shutil.copy2(monitor.config_file_path, backup_path)
+                monitor.logger.info(f"Created backup of config: {backup_path}")
+
+            monitor.logger.info(f"DEBUG: Data to be written to config by _write_config: {json.dumps(new_data)}")
+            monitor._write_config(new_data)
+            try:
+                with open(monitor.config_file_path, 'r', encoding='utf-8') as f_check:
+                    written_data_check = json.load(f_check)
+                monitor.logger.info(
+                    f"DEBUG: Data read back from config immediately after _write_config: {json.dumps(written_data_check)}")
+                if new_data != written_data_check:
+                    monitor.logger.warning("DEBUG: Data in file does NOT match data intended to be written!")
+            except Exception as read_check_err:
+                monitor.logger.error(f"DEBUG: Error reading back config for check: {read_check_err}")
+
+            success, reload_msg = monitor._reload_config_dynamically(new_data)
+
+            if not success:
+                raise Exception(f"Failed to apply new configuration dynamically: {reload_msg}")
+
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            monitor.logger.info("Configuration updated and applied successfully.")
+            return Response(
+                        content={
+                            "message": reload_msg},
+                        status_code=HTTP_200_OK,
+                        media_type='application/json'
+                    )
+
+        except Exception as ex:
+            monitor.logger.exception(f"Error updating configuration: {ex}. Rolling back.")
+            if os.path.exists(backup_path):
+                try:
+                    shutil.move(backup_path, monitor.config_file_path)
+                    monitor.logger.info(f"Rolled back configuration from {backup_path}")
+                    monitor.load_from_json(monitor.config_file_path)
+                    monitor.setup_scheduler()
+                    monitor.logger.info("Re-applied previous configuration settings after rollback.")
+
+                except Exception as rb_err:
+                    monitor.logger.error(
+                        f"CRITICAL: Failed to rollback configuration file: {rb_err}. Config may be inconsistent.")
+                    return Response(
+                        content={
+                            "detail": f"Error saving configuration and failed to rollback: {rb_err}. Manual check required."},
+                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                        media_type='application/json'
+                    )
+            else:
+                try:
+                    monitor._write_config(current_config_in_memory)
+                    monitor.logger.info("Wrote original in-memory config back after update failure.")
+                    monitor.load_from_json(monitor.config_file_path)
+                    monitor.setup_scheduler()
+                except Exception as write_back_err:
+                    monitor.logger.error(
+                        f"CRITICAL: Failed to write original config back: {write_back_err}. Config may be corrupted.")
+                    return Response(
+                        content={
+                            "detail": f"Error saving configuration, failed to write original back: {write_back_err}. Manual check required."},
+                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                        media_type='application/json'
+                    )
+
+            return Response(
+                content={
+                    "detail": f"Error saving configuration: {str(ex)}. Configuration has been rolled back to previous state."},
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                media_type='application/json'
+            )
+
+
+@get("/api/img-proxy")
+async def img_proxy_handler(request: Request, state: State) -> Response:
+    """Proxies image requests."""
+    monitor: fbRssAdMonitor = state.monitor
+    try:
+        img_url = request.query_params.get("url")
+        response = requests.get(img_url, stream=True)
+        response.raise_for_status()
+
+        return Response(
+            content=response.content,
+            status_code=HTTP_200_OK,
+            media_type=response.headers.get('Content-Type', 'image/jpeg'),
+            headers={
+                'Content-Length': response.headers.get('Content-Length', '0')
+            }
+        )
+
+    except requests.RequestException as ex:
+        monitor.logger.error(f"Error generating img proxy request: {ex}")
+        return Response(
+            content="Image not found",
+            status_code=HTTP_404_NOT_FOUND,
+            media_type='text/plain'
+        )
+
+
+def create_app(monitor: fbRssAdMonitor) -> Litestar:
+    """Creates and configures the Litestar application."""
+
+    static_router = None
+    if os.path.exists('static'):
+        static_router = create_static_files_router(
+            path="/static",
+            directories=["static"]
+        )
+
+    template_config = None
+    if os.path.exists('templates'):
+        template_config = TemplateConfig(
+            directory="templates",
+            engine=JinjaTemplateEngine,
+        )
+
+    routes = [
+        rss_handler,
+        edit_config_page_handler,
+        get_config_handler,
+        update_config_handler,
+        img_proxy_handler,
+    ]
+
+    if static_router:
+        routes.append(static_router)
+
+    logging_config = LoggingConfig(
+        root={"level": "DEBUG", "handlers": ["queue_listener"]},
+        formatters={
+            "standard": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
+        },
+        log_exceptions="always",
+    )
+
+    server = Litestar(
+        route_handlers=routes,
+        state=State({"monitor": monitor}),
+        template_config=template_config,
+        logging_config=logging_config
+    )
+
+    return server
+
+
 if __name__ == "__main__":
     init_logger = logging.getLogger('init')
     init_handler = logging.StreamHandler()
@@ -1018,15 +1103,34 @@ if __name__ == "__main__":
     try:
         monitor_instance = fbRssAdMonitor()
         initialize_database(monitor_instance.database, monitor_instance.logger)
-        monitor_instance.run(debug_opt=False)
+
+        monitor_instance.setup_scheduler()
+
+        app = create_app(monitor_instance)
+
+        monitor_instance.logger.info(
+            f"Starting Litestar server on {monitor_instance.server_ip}:{monitor_instance.server_port}...")
+
+        import uvicorn
+
+        uvicorn.run(
+            app,
+            host=monitor_instance.server_ip,
+            port=monitor_instance.server_port,
+            log_level="info"
+        )
 
     except (FileNotFoundError, ValueError, sqlite3.Error) as e:
-         init_logger.error(f"Initialization failed: {e}")
-         if monitor_instance:
-              monitor_instance.shutdown()
-         exit(1)
+        init_logger.error(f"Initialization failed: {e}")
+        if monitor_instance:
+            monitor_instance.shutdown()
+        exit(1)
+    except KeyboardInterrupt:
+        init_logger.info("KeyboardInterrupt received. Shutting down...")
+        if monitor_instance:
+            monitor_instance.shutdown()
     except Exception as e:
         init_logger.exception(f"An unexpected error occurred during startup or runtime: {e}")
         if monitor_instance:
-             monitor_instance.shutdown()
+            monitor_instance.shutdown()
         exit(1)
