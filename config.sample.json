@@ -1,6 +1,7 @@
 {
     "url_filters": {
         "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
+            "enabled": true,
             "exclude": ["roku"],
             "level1": ["tv"],
             "level2": ["smart"],
@@ -11,6 +12,8 @@
             "level1": ["dishwasher"],
             "level2": ["kitchenaid", "samsung"]
         },
-        "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {}
+        "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {
+            "enabled": false
+        }
     }
 }
